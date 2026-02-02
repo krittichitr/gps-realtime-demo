@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { GoogleMap, useJsApiLoader, Marker, Circle, DirectionsRenderer } from '@react-google-maps/api'
+import { GoogleMap, useJsApiLoader, Marker, Circle, DirectionsRenderer, OverlayView } from '@react-google-maps/api'
 import { supabase } from '@/lib/supabase'
 
 const containerStyle = {
@@ -28,7 +28,7 @@ export default function Home() {
   // State
   const [map, setMap] = useState<google.maps.Map | null>(null)
   const [markerPosition, setMarkerPosition] = useState(defaultCenter)
-  const [statusInfo, setStatusInfo] = useState({ label: "ปกติ: อยู่ในเขตปลอดภัย", color: "bg-green-500", pulse: "" }) // New Status State
+  const [statusInfo, setStatusInfo] = useState({ label: "ปกติ: อยู่ในเขตปลอดภัย", color: "bg-green-500", pulse: "" }) 
   const [directionsResponse, setDirectionsResponse] = useState<google.maps.DirectionsResult | null>(null)
   const [currentDistance, setCurrentDistance] = useState(0)
   
@@ -36,6 +36,8 @@ export default function Home() {
   const [safeZoneCenter, setSafeZoneCenter] = useState(defaultCenter)
   // State สำหรับตำแหน่งผู้ดูแล (Admin)
   const [adminLocation, setAdminLocation] = useState<google.maps.LatLngLiteral | null>(null)
+  // State สำหรับล็อคหน้าจอ (Auto-Center)
+  const [isAutoCenter, setIsAutoCenter] = useState(true)
   
   // Ref for accessing latest admin location inside callbacks without re-subscribing
   const adminLocationRef = useRef<google.maps.LatLngLiteral | null>(null);
@@ -52,6 +54,34 @@ export default function Home() {
   const onUnmount = useCallback(function callback(map: google.maps.Map) {
     setMap(null)
   }, [])
+
+  // 1. Initial Load: Restore from LocalStorage & Supabase
+  useEffect(() => {
+    // กู้คืนตำแหน่งล่าสุดจาก LocalStorage (แก้ปัญหาเริ่มมาอยู่กรุงเทพ)
+    const savedLat = localStorage.getItem('lastPatientLat');
+    const savedLng = localStorage.getItem('lastPatientLng');
+    
+    if (savedLat && savedLng) {
+      const savedPos = { lat: parseFloat(savedLat), lng: parseFloat(savedLng) };
+      setMarkerPosition(savedPos);
+      // ถ้า map โหลดเสร็จแล้ว ให้ pan ไปเลย
+      if (map) map.panTo(savedPos);
+    }
+
+    // กู้คืน Safe Zone Config จาก Supabase
+    const fetchSafeZoneConfig = async () => {
+        const { data } = await supabase
+            .from('safe_zones')
+            .select('*')
+            .eq('id', 'current_user_config')
+            .single();
+        
+        if (data) {
+            setSafeZoneCenter({ lat: data.center_lat, lng: data.center_lng });
+        }
+    }
+    fetchSafeZoneConfig();
+  }, [map]); // Run when map is ready or mount
 
   // ติดตามตำแหน่งผู้ดูแล (Admin)
   useEffect(() => {
@@ -72,9 +102,10 @@ export default function Home() {
     }
   }, []);
 
-  // ฟังก์ชันคำนวณระยะทาง (Haversine Formula)
+  // ... (Distance functons omitted for brevity if unchanged, but I need to replace the block)
+  // ฟังก์ชันคำนวณระยะทาง
   const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371; // Radius of the earth in km
+    const R = 6371; 
     const dLat = deg2rad(lat2 - lat1);
     const dLon = deg2rad(lon2 - lon1);
     const a =
@@ -82,29 +113,27 @@ export default function Home() {
       Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
       Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const d = R * c; // Distance in km
-    return d * 1000; // Distance in meters
+    const d = R * c; 
+    return d * 1000; 
   }
 
   const deg2rad = (deg: number) => {
     return deg * (Math.PI / 180)
   }
 
-  // ฟังก์ชันคำนวณเส้นทาง (Refactored)
+  // คำนวณเส้นทาง
   const calculateRoute = (origin: google.maps.LatLngLiteral, destination: google.maps.LatLngLiteral) => {
     if (!window.google) return;
-
     const directionsService = new google.maps.DirectionsService();
-
     directionsService.route(
       {
-        origin: origin,      // พิกัด MacBook (ผู้ดูแล)
-        destination: destination, // พิกัดล่าสุดจากมือถือ (ผู้ป่วย)
+        origin: origin,      
+        destination: destination, 
         travelMode: google.maps.TravelMode.DRIVING,
       },
       (result, status) => {
         if (status === "OK" && result) {
-          setDirectionsResponse(result); // เส้นสีฟ้าจะเปลี่ยนรูปร่างตามพิกัดใหม่ทันที
+          setDirectionsResponse(result); 
         } else {
           console.error(`Directions request failed due to ${status}`);
         }
@@ -112,27 +141,24 @@ export default function Home() {
     );
   };
 
-  // Logic การกำหนดสถานะ
+  // Status Logic
   const getStatus = (distance: number) => {
     if (distance > SAFE_ZONE_DANGER) return { label: "อันตราย: ออกนอกเขต!", color: "bg-red-600", pulse: "animate-ping" };
     if (distance > SAFE_ZONE_WARNING) return { label: "คำเตือน: ออกนอกเขตชั้นใน", color: "bg-yellow-500", pulse: "" };
     return { label: "ปกติ: อยู่ในเขตปลอดภัย", color: "bg-green-500", pulse: "" };
   };
 
-  // ฟังก์ชันเช็ค Geofence (ปรับให้เรียก calculateRoute ถ้าจำเป็น)
+  // Check Geofence
   const checkGeofence = (lat: number, lng: number) => {
     const distance = getDistanceFromLatLonInM(lat, lng, safeZoneCenter.lat, safeZoneCenter.lng);
     setCurrentDistance(distance);
     
-    // อัปเดตสถานะ (3 ระดับ)
+    // อัปเดตสถานะ
     const newStatus = getStatus(distance);
     setStatusInfo(newStatus);
     
-    console.log(`Distance: ${distance.toFixed(2)}m, Status: ${newStatus.label}`);
-
-    // ถ้าเป็นระยะ Danger ให้คำนวณเส้นทางใหม่ทันที (Real-time Navigation)
+    // ถ้าเป็นระยะ Danger ให้คำนวณเส้นทางใหม่ทันที
     if (distance > SAFE_ZONE_DANGER) {
-        // ใช้ตำแหน่ง Admin ล่าสุด (ถ้ามี) หรือ Safe Zone ถ้าไม่มี
         const origin = adminLocationRef.current || safeZoneCenter;
         calculateRoute(origin, { lat, lng });
     } else {
@@ -140,11 +166,19 @@ export default function Home() {
     }
   }
 
-  // ฟังก์ชันอัปเดตตำแหน่ง Marker
+  // อัปเดตตำแหน่ง Marker (Patient)
   const updateMarkerPosition = (lat: number, lng: number) => {
     const newPos = { lat, lng };
     setMarkerPosition(newPos);
-    map?.panTo(newPos);
+    
+    // บันทึกลง LocalStorage
+    localStorage.setItem('lastPatientLat', lat.toString());
+    localStorage.setItem('lastPatientLng', lng.toString());
+    
+    // Pan map if Auto-Center is ON
+    if (isAutoCenter) {
+      map?.panTo(newPos);
+    }
   }
 
   useEffect(() => {
@@ -164,7 +198,7 @@ export default function Home() {
 
     fetchLatestLocation();
 
-    // 2. สมัครรับข้อมูล Real-time Subscription (ฟังข้อมูลสดจาก Supabase)
+    // 2. สมัครรับข้อมูล Real-time Subscription
     const locationChannel = supabase
       .channel('public:locations')
       .on(
@@ -172,8 +206,6 @@ export default function Home() {
         { event: '*', schema: 'public', table: 'locations' }, 
         (payload: any) => {
           const { lat, lng } = payload.new;
-          
-          // อัปเดตตำแหน่งผู้ป่วยใน State และ เช็คเงื่อนไขทันที
           updateMarkerPosition(lat, lng);
           checkGeofence(lat, lng);
         }
@@ -183,7 +215,7 @@ export default function Home() {
     return () => {
       supabase.removeChannel(locationChannel);
     }
-  }, [map, safeZoneCenter]); 
+  }, [map, safeZoneCenter, isAutoCenter]); // Add isAutoCenter dependency 
 
   if (loadError) return <div className="p-10 text-red-500">Error loading maps. Check API Key.</div>;
   if (!isLoaded) return <div className="p-10">Loading Map...</div>;
@@ -255,6 +287,33 @@ export default function Home() {
             บันทึกตำแหน่งนี้ (Save Config)
           </button>
 
+          <div className="flex items-center gap-2 mt-2">
+            <button 
+                onClick={() => setIsAutoCenter(!isAutoCenter)}
+                className={`flex-1 py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all ${
+                    isAutoCenter 
+                    ? 'bg-blue-500 text-white shadow-blue-500/20 shadow-lg' 
+                    : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                }`}
+            >
+                {isAutoCenter ? (
+                    <>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M10 2a.75.75 0 01.75.75v12.59l1.95-2.1a.75.75 0 111.1 1.02l-3.25 3.5a.75.75 0 01-1.1 0l-3.25-3.5a.75.75 0 111.1-1.02l1.95 2.1V2.75A.75.75 0 0110 2z" clipRule="evenodd" />
+                        </svg>
+                        ล็อคตำแหน่ง (On)
+                    </>
+                ) : (
+                    <>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                        </svg>
+                        อิสระ (Off)
+                    </>
+                )}
+            </button>
+          </div>
+
           <button 
             onClick={() => {
                 // ถ้ายังไม่ได้ตำแหน่ง Admin ให้ใช้ Safe Zone แทน หรือแจ้งเตือน
@@ -280,6 +339,7 @@ export default function Home() {
         zoom={16}
         onLoad={onLoad}
         onUnmount={onUnmount}
+        onDragStart={() => setIsAutoCenter(false)} // ถ้าผู้ใช้ลากแผนที่ ให้ยกเลิก Auto Center ทันที
         onClick={(e) => {
             if (e.latLng) {
                 setSafeZoneCenter({ lat: e.latLng.lat(), lng: e.latLng.lng() });
@@ -299,10 +359,10 @@ export default function Home() {
             ]
         }}
       >
+        {/* Patient Marker (Standard Google Pin) */}
         <Marker 
             position={markerPosition} 
-            animation={google.maps.Animation.DROP}
-            label="Patient"
+            animation={window.google?.maps?.Animation?.DROP}
         />
 
         {/* Marker แสดงตำแหน่งผู้ดูแล (Admin) - สีน้ำเงิน */}

@@ -24,3 +24,15 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.patient-label-style {
+  background-color: #ea4335;
+  /* สีแดง Google */
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 2px solid white;
+  box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.3);
+  transform: translateY(-55px);
+  /* ขยับป้ายขึ้นไปอยู่เหนือหัวไอคอน */
+  white-space: nowrap;
+}
