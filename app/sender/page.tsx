@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 
 export default function Sender() {
@@ -7,6 +7,41 @@ export default function Sender() {
   const [statusColor, setStatusColor] = useState('text-gray-500')
   const [distance, setDistance] = useState<number | null>(null)
   const [homePos, setHomePos] = useState({ lat: 13.7649, lng: 100.5383 }) // Default fallback
+
+  // Wake Lock & Audio Ref for Background Execution
+  const wakeLock = useRef<any>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  // ฟังก์ชันขอ Screen Wake Lock (ป้องกันหน้าจอดับ)
+  const requestWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock.current = await (navigator as any).wakeLock.request('screen');
+        console.log('Wake Lock active!');
+        
+        wakeLock.current.addEventListener('release', () => {
+          console.log('Wake Lock released');
+        });
+      }
+    } catch (err: any) {
+      console.error(`${err.name}, ${err.message}`);
+    }
+  };
+
+  // Re-acquire lock when visibility changes
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (wakeLock.current !== null && document.visibilityState === 'visible') {
+        await requestWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (wakeLock.current) wakeLock.current.release();
+    };
+  }, []);
 
   // ฟังก์ชันคำนวณระยะห่าง (หน่วยเป็นเมตร)
   function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -41,11 +76,17 @@ export default function Sender() {
     }
   }
 
-  const sendLocation = () => {
+  const sendLocation = async () => {
+    // 1. Activate Keep-Alive Mechanisms
+    await requestWakeLock();
+    if (audioRef.current) {
+        audioRef.current.play().catch(e => console.log("Audio play failed:", e));
+    }
+
     if ("geolocation" in navigator) {
       setStatus("กำลังระบุจุดเริ่มต้น (Safe Zone)...");
       
-      // 1. หาตำแหน่งปัจจุบันเพื่อตั้งเป็นจุดปลอดภัย (Safe Zone Center)
+      // 2. หาตำแหน่งปัจจุบันเพื่อตั้งเป็นจุดปลอดภัย (Safe Zone Center)
       navigator.geolocation.getCurrentPosition((startPos) => {
         const startLat = startPos.coords.latitude;
         const startLng = startPos.coords.longitude;
@@ -53,7 +94,7 @@ export default function Sender() {
         setHomePos({ lat: startLat, lng: startLng });
         setStatus(`ตั้งจุดปลอดภัยแล้ว (${startLat.toFixed(4)}, ${startLng.toFixed(4)}). กำลังติดตาม...`);
 
-        // 2. เริ่มติดตามการเคลื่อนที่
+        // 3. เริ่มติดตามการเคลื่อนที่
         navigator.geolocation.watchPosition(async (position) => {
           const { latitude, longitude } = position.coords;
 
@@ -110,6 +151,18 @@ export default function Sender() {
         >
           เริ่มส่งตำแหน่ง (Start Tracking)
         </button>
+
+        <p className="mt-4 text-xs text-gray-400">
+            *กรุณาเปิดหน้าจอนี้ค้างไว้เพื่อการส่งสัญญาณที่ต่อเนื่อง (ระบบจะป้องกันหน้าจอดับอัตโนมัติ)
+        </p>
+
+        {/* Hidden Audio for Background Keep-Alive */}
+        <audio 
+            ref={audioRef} 
+            loop 
+            src="https://assets.mixkit.co/active_storage/sfx/212/212.wav" 
+            className="hidden" 
+        />
       </div>
     </div>
   );
