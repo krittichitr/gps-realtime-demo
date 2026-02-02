@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { GoogleMap, useJsApiLoader, Marker, Circle, DirectionsRenderer, OverlayView } from '@react-google-maps/api'
+import { GoogleMap, useJsApiLoader, Marker, Circle, DirectionsRenderer, OverlayView, TrafficLayer } from '@react-google-maps/api'
 import { supabase } from '@/lib/supabase'
 
 const containerStyle = {
@@ -141,6 +141,12 @@ export default function Home() {
         origin: origin,      
         destination: destination, 
         travelMode: google.maps.TravelMode.DRIVING,
+        provideRouteAlternatives: true, // [เป๊ะ 1] ให้ Google เสนอเส้นทางสำรองเหมือนในแอปจริง
+        optimizeWaypoints: true,
+        drivingOptions: {
+          departureTime: new Date(Date.now()), // คำนวณตามสภาพจราจรปัจจุบัน
+          trafficModel: 'bestguess' as google.maps.TrafficModel // ใช้ cast เพื่อป้องกัน Type error
+        }
       },
       (result, status) => {
         if (status === "OK" && result) {
@@ -554,16 +560,20 @@ export default function Home() {
             </button>
             
             {/* External Link */}
-            <button
+            {/* External App Link */}
+            <button 
                 onClick={() => {
                     const originLat = adminLocation ? adminLocation.lat : safeZoneCenter.lat;
                     const originLng = adminLocation ? adminLocation.lng : safeZoneCenter.lng;
                     const url = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${markerPosition.lat},${markerPosition.lng}&travelmode=driving`;
                     window.open(url, '_blank');
                 }}
-                className="w-full text-blue-600 font-medium py-2 rounded-lg hover:bg-blue-50 transition-all flex items-center justify-center gap-2 text-sm"
+                className="mt-3 w-full bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold py-3 rounded-xl shadow-sm transition flex items-center justify-center gap-2 border border-blue-200"
             >
-                หรือเปิดใน Google Maps App (ไม่ Real-time) ↗
+                <span>เปิดการนำทางเต็มรูปแบบ</span>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
             </button>
 
             {/* Desktop Only: Save Config Button (Small link at bottom) */}
@@ -662,21 +672,38 @@ export default function Home() {
           }}
         />
 
-        {/* แสดงเส้นทางเมื่อออกนอกเขต */}
+        {/* เส้นทางนำทาง (Directions Path) */}
         {directionsResponse && (
           <DirectionsRenderer 
-            directions={directionsResponse}
+            directions={directionsResponse} 
             options={{
-              suppressMarkers: true, // ไม่ต้องแสดง A/B ซ้ำ เพราะมี Marker แล้ว
               polylineOptions: {
-                strokeColor: '#ef4444',
-                strokeWeight: 5,
-                strokeOpacity: 0.8
-              }
+                strokeColor: "#4285F4", // สีฟ้า Google Maps
+                strokeWeight: 6,
+                strokeOpacity: 0.8,
+              },
+              // [เป๊ะ 2] ปิด Marker เริ่มต้นของ Google เพื่อใช้ Marker รูปคน/Blue Dot ที่เราทำไว้เอง
+              suppressMarkers: true, 
+              preserveViewport: true // กันไม่ให้ map ย่อขยายเองตอนเปลี่ยนเส้นทาง (เราคุมเองแล้ว)
             }}
           />
         )}
+
+
+
       </GoogleMap>
+
+       {/* Debug: ข้อมูลเส้นทางแบบละเอียด (ตาม Request) */}
+       {directionsResponse && (
+        <div className="absolute top-28 left-4 z-[1050] bg-white p-4 rounded-lg shadow-xl border-t-4 border-blue-500 hidden md:block max-w-sm">
+            <h3 className="font-bold text-lg mb-2">ข้อมูลการนำทาง (Debug)</h3>
+            <div className="space-y-1 text-sm">
+                <p>ระยะทาง: <span className="font-mono font-bold text-gray-700">{directionsResponse.routes[0].legs[0].distance?.text}</span></p>
+                <p>เวลาเดินทาง: <span className="text-green-600 font-bold">{directionsResponse.routes[0].legs[0].duration?.text}</span></p>
+                <p className="text-gray-500">ผ่าน: {directionsResponse.routes[0].summary}</p>
+            </div>
+        </div>
+      )}
     </div>
   )
 }
