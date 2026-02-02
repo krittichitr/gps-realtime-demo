@@ -116,7 +116,12 @@ export default function Home() {
     return deg * (Math.PI / 180)
   }
 
-  // คำนวณเส้นทาง
+  // State สำหรับรับข้อมูล Route Steps (Turn-by-Turn)
+  const [routeSteps, setRouteSteps] = useState<google.maps.DirectionsStep[]>([]);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [distToNextStep, setDistToNextStep] = useState(0); // ระยะทางถึงจุดเลี้ยวถัดไป
+
+  // คำนวณเส้นทาง และเก็บ Steps
   const calculateRoute = (origin: google.maps.LatLngLiteral, destination: google.maps.LatLngLiteral) => {
     if (!window.google) return;
     const directionsService = new google.maps.DirectionsService();
@@ -128,13 +133,75 @@ export default function Home() {
       },
       (result, status) => {
         if (status === "OK" && result) {
-          setDirectionsResponse(result); 
+          setDirectionsResponse(result);
+          // เก็บข้อมูล Steps เพื่อทำ Navigation HUD
+          const leg = result.routes[0].legs[0];
+          setRouteSteps(leg.steps); 
+          setCurrentStepIndex(0); // เริ่มต้นที่ Step แรก
         } else {
           console.error(`Directions request failed due to ${status}`);
         }
       }
     );
   };
+
+  // Logic การเปลี่ยน Step นำทาง (Turn-by-Turn Logic)
+  useEffect(() => {
+    if (isNavigating && routeSteps.length > 0 && adminLocation && currentStepIndex < routeSteps.length) {
+        const currentStep = routeSteps[currentStepIndex];
+        // คำนวณระยะห่างปัจจุบัน ถึง จุดสิ้นสุดของ Step นี้ (จุดเลี้ยว)
+        const dist = getDistanceFromLatLonInM(
+            adminLocation.lat, adminLocation.lng, 
+            currentStep.end_location.lat(), currentStep.end_location.lng()
+        );
+        setDistToNextStep(dist);
+
+        // ถ้าใกล้ถึงจุดเลี้ยว (น้อยกว่า 30 เมตร) ให้ข้ามไป Step ถัดไป
+        if (dist < 30) {
+            if (currentStepIndex < routeSteps.length - 1) {
+                setCurrentStepIndex(prev => prev + 1);
+            }
+        }
+    }
+  }, [adminLocation, isNavigating, routeSteps, currentStepIndex]);
+
+  // ฟังก์ชันคำนวณระยะทาง
+  // const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  //   const R = 6371; 
+  //   const dLat = deg2rad(lat2 - lat1);
+  //   const dLon = deg2rad(lon2 - lon1);
+  //   const a =
+  //     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+  //     Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+  //     Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  //   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  //   const d = R * c; 
+  //   return d * 1000; 
+  // }
+
+  // const deg2rad = (deg: number) => {
+  //   return deg * (Math.PI / 180)
+  // }
+
+  // คำนวณเส้นทาง
+  // const calculateRoute = (origin: google.maps.LatLngLiteral, destination: google.maps.LatLngLiteral) => {
+  //   if (!window.google) return;
+  //   const directionsService = new google.maps.DirectionsService();
+  //   directionsService.route(
+  //     {
+  //       origin: origin,      
+  //       destination: destination, 
+  //       travelMode: google.maps.TravelMode.DRIVING,
+  //     },
+  //     (result, status) => {
+  //       if (status === "OK" && result) {
+  //         setDirectionsResponse(result); 
+  //       } else {
+  //         console.error(`Directions request failed due to ${status}`);
+  //       }
+  //     }
+  //   );
+  // };
 
   // Status Logic
   const getStatus = (distance: number) => {
@@ -221,128 +288,203 @@ export default function Home() {
     return 'text-green-600';
   }
 
+  // Helper: Strip HTML tags from instruction
+  const stripHtml = (html: string) => {
+    const tmp = document.createElement("DIV");
+    tmp.innerHTML = html;
+    return tmp.textContent || tmp.innerText || "";
+  }
+
+  // Helper: Get Icon for Maneuver
+  const getManeuverIcon = (maneuver: string | undefined) => {
+    if (!maneuver) return (
+       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-10 h-10">
+         <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+       </svg>
+    ); // Straight default
+    
+    if (maneuver.includes("left")) return (
+       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-10 h-10">
+         <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+       </svg>
+    );
+    if (maneuver.includes("right")) return (
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-10 h-10">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 000 12h3" />
+        </svg>
+    );
+    return (
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-10 h-10">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+        </svg>
+    );
+  }
+
   return (
     <div className="relative w-full h-screen bg-gray-100">
 
-      {/* --- Mobile-First Redesign --- */}
-
-      {/* 1. Top Status Pill (Compact) */}
-      <div className="fixed top-4 left-4 right-4 z-[1000] flex justify-center pointer-events-none">
-        <div className={`pointer-events-auto bg-white/90 backdrop-blur-md px-4 py-2 rounded-full shadow-lg border border-gray-100 flex items-center gap-3 transition-all ${statusInfo.color === 'bg-red-600' ? 'ring-2 ring-red-500 ring-offset-2' : ''}`}>
-            <div className={`w-2.5 h-2.5 rounded-full ${statusInfo.color} ${statusInfo.pulse && 'animate-pulse'}`}></div>
-            <span className={`text-sm font-bold ${statusInfo.color === 'bg-red-600' ? 'text-red-600' : 'text-gray-700'}`}>
-                {statusInfo.label}
-            </span>
-        </div>
-      </div>
-
-      {/* 2. Floating Map Controls (Right Side) */}
-      <div className="fixed right-4 bottom-[240px] md:bottom-8 z-[1000] flex flex-col gap-3">
-         {/* Auto Center Toggle */}
-         <button 
-            onClick={() => setIsAutoCenter(!isAutoCenter)}
-            className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all active:scale-95 ${
-                isAutoCenter ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-            }`}
-        >
-            {isAutoCenter ? (
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
-                    <path fillRule="evenodd" d="M11.54 22.351l.07.04.028.016a.76.76 0 00.723 0l.028-.015.071-.041a16.975 16.975 0 001.144-.742 19.58 19.58 0 002.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 00-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 002.682 2.282 16.975 16.975 0 001.145.742zM12 13.5a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
-                </svg>
-            ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l1.664 1.664M21 21l-1.5-1.5m-5.485-1.242L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0c1.1.128 1.907 1.077 1.907 2.185V19.5M4.664 4.664L19.5 19.5" />
-                </svg>
-            )}
-         </button>
-      </div>
-
-      {/* 3. Bottom Sheet Info Card */}
-      <div className="fixed bottom-0 left-0 right-0 z-[1000] bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.1)] p-6 pb-8 md:w-96 md:rounded-2xl md:bottom-6 md:left-6 md:right-auto md:pb-6 transition-all transform duration-300 ease-out">
-        {/* Drag Handle (Mobile only styling detail) */}
-        <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-6 md:hidden"></div>
-
-        <div className="flex items-start justify-between mb-6">
-            <div>
-                <h2 className="text-2xl font-bold text-gray-900 leading-tight">ผู้ป่วย</h2>
-                <div className="flex items-center gap-1 text-gray-400 text-sm font-medium mt-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                        <path fillRule="evenodd" d="M9.69 18.933l.003.001C9.89 19.02 10 19 10 19s.11.02.308-.066l.002-.001.006-.003.018-.008a5.741 5.741 0 00.281-.14c.186-.096.446-.24.757-.433.62-.384 1.445-.966 2.274-1.765C15.302 14.988 17 12.493 17 9A7 7 0 103 9c0 3.492 1.698 5.988 3.355 7.584a13.731 13.731 0 002.273 1.765 11.842 11.842 0 00.976.544l.062.029.006.003.003.001zM10 13a4 4 0 100-8 4 4 0 000 8z" clipRule="evenodd" />
-                    </svg>
-                    <span>{markerPosition.lat.toFixed(5)}, {markerPosition.lng.toFixed(5)}</span>
+      {/* --- HUD: Navigation Mode (Google Maps Style) --- */}
+      {isNavigating && routeSteps.length > 0 && routeSteps[currentStepIndex] ? (
+        <>
+            {/* Top Green Banner */}
+            <div className="fixed top-0 left-0 right-0 z-[1100] bg-[#0F9D58] text-white p-4 pb-6 shadow-xl rounded-b-3xl">
+                <div className="flex items-start gap-4">
+                    {/* Direction Icon */}
+                    <div className="mt-1 opacity-90">
+                        {getManeuverIcon(routeSteps[currentStepIndex].maneuver)}
+                    </div>
+                    {/* Text Info */}
+                    <div className="flex-1">
+                        <div className="text-3xl font-bold mb-1">
+                             {distToNextStep < 1000 ? `${distToNextStep.toFixed(0)} ม.` : `${(distToNextStep/1000).toFixed(1)} กม.`}
+                        </div>
+                        <div className="text-lg font-medium leading-snug opacity-95">
+                             {stripHtml(routeSteps[currentStepIndex].instructions)}
+                        </div>
+                    </div>
                 </div>
             </div>
-            
-            <div className="text-right">
-                <p className="text-sm text-gray-400 mb-0.5">ระยะห่าง</p>
-                <p className={`text-2xl font-black ${distanceColor(currentDistance)}`}>
-                    {currentDistance < 1000 ? currentDistance.toFixed(0) : (currentDistance/1000).toFixed(2)} 
-                    <span className="text-sm font-normal text-gray-400 ml-1">{currentDistance < 1000 ? 'ม.' : 'กม.'}</span>
-                </p>
+
+            {/* Bottom Info Bar (Distance & Time) */}
+            <div className="fixed bottom-0 left-0 right-0 z-[1100] bg-white p-5 border-t border-gray-200 flex items-center justify-between shadow-[0_-5px_20px_rgba(0,0,0,0.1)]">
+                <div>
+                     <div className="text-2xl font-bold text-[#0F9D58]">
+                        {(currentDistance/1000).toFixed(1)} กม.
+                     </div>
+                     <div className="text-sm text-gray-400">
+                        ถึงใน {((currentDistance/1000) * 2).toFixed(0)} นาที (โดยประมาณ)
+                     </div>
+                </div>
+                <button 
+                    onClick={() => setIsNavigating(false)}
+                    className="bg-red-100 hover:bg-red-200 text-red-600 px-6 py-3 rounded-full font-bold text-lg transition-colors"
+                >
+                    ปิด (Exit)
+                </button>
             </div>
-        </div>
+        </>
+      ) : (
+        /* --- Standard Monitor UI (Hidden when Navigating) --- */
+        <>
+          {/* 1. Top Status Pill (Compact) */}
+          <div className="fixed top-4 left-4 right-4 z-[1000] flex justify-center pointer-events-none">
+            <div className={`pointer-events-auto bg-white/90 backdrop-blur-md px-4 py-2 rounded-full shadow-lg border border-gray-100 flex items-center gap-3 transition-all ${statusInfo.color === 'bg-red-600' ? 'ring-2 ring-red-500 ring-offset-2' : ''}`}>
+                <div className={`w-2.5 h-2.5 rounded-full ${statusInfo.color} ${statusInfo.pulse && 'animate-pulse'}`}></div>
+                <span className={`text-sm font-bold ${statusInfo.color === 'bg-red-600' ? 'text-red-600' : 'text-gray-700'}`}>
+                    {statusInfo.label}
+                </span>
+            </div>
+          </div>
 
-        {/* Action Button: Live Navigation */}
-        <button 
-            onClick={() => {
-                if (!adminLocation) {
-                    alert("กำลังระบุตำแหน่งของคุณ... กรุณารอสักครู่");
-                    return;
-                }
-                setIsNavigating(!isNavigating);
-            }}
-            className={`w-full ${isNavigating ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white text-lg font-bold py-4 rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 group mb-3`}
-        >
-            {isNavigating ? (
-                <>
-                <span className="animate-pulse">🔴 กำลังนำทางสด...</span>
-                <span className="text-sm font-normal opacity-80">(แตะเพื่อหยุด)</span>
-                </>
-            ) : (
-                <>
-                <span>เริ่มนำทางสด (Live GPS)</span>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-                </svg>
-                </>
-            )}
-        </button>
-        
-        {/* External Link */}
-        <button
-            onClick={() => {
-                const originLat = adminLocation ? adminLocation.lat : safeZoneCenter.lat;
-                const originLng = adminLocation ? adminLocation.lng : safeZoneCenter.lng;
-                const url = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${markerPosition.lat},${markerPosition.lng}&travelmode=driving`;
-                window.open(url, '_blank');
-            }}
-            className="w-full text-blue-600 font-medium py-2 rounded-lg hover:bg-blue-50 transition-all flex items-center justify-center gap-2 text-sm"
-        >
-            หรือเปิดใน Google Maps App (ไม่ Real-time) ↗
-        </button>
-
-        {/* Desktop Only: Save Config Button (Small link at bottom) */}
-        <div className="hidden md:block mt-4 text-center">
-             <button
-                onClick={async () => {
-                    const { error } = await supabase
-                        .from('safe_zones')
-                        .upsert({ 
-                            id: 'current_user_config', 
-                            center_lat: safeZoneCenter.lat, 
-                            center_lng: safeZoneCenter.lng,
-                            radius_1: SAFE_ZONE_WARNING,
-                            radius_2: SAFE_ZONE_DANGER
-                        });
-                    if (!error) alert("บันทึกจุดปลอดภัยเรียบร้อย!");
-                }}
-                className="text-xs text-blue-500 hover:text-blue-700 underline"
-             >
-                บันทึกตำแหน่ง Safe Zone ปัจจุบัน
+          {/* 2. Floating Map Controls (Right Side) */}
+          <div className="fixed right-4 bottom-[380px] md:bottom-8 z-[1000] flex flex-col gap-3">
+             {/* Auto Center Toggle */}
+             <button 
+                onClick={() => setIsAutoCenter(!isAutoCenter)}
+                className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center transition-all active:scale-95 ${
+                    isAutoCenter ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+            >
+                {isAutoCenter ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+                        <path fillRule="evenodd" d="M11.54 22.351l.07.04.028.016a.76.76 0 00.723 0l.028-.015.071-.041a16.975 16.975 0 001.144-.742 19.58 19.58 0 002.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 00-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 002.682 2.282 16.975 16.975 0 001.145.742zM12 13.5a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                    </svg>
+                ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l1.664 1.664M21 21l-1.5-1.5m-5.485-1.242L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0c1.1.128 1.907 1.077 1.907 2.185V19.5M4.664 4.664L19.5 19.5" />
+                    </svg>
+                )}
              </button>
-        </div>
-      </div>
+          </div>
+
+          {/* 3. Bottom Sheet Info Card */}
+          <div className="fixed bottom-0 left-0 right-0 z-[1000] bg-white rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.1)] p-6 pb-12 md:w-96 md:rounded-2xl md:bottom-6 md:left-6 md:right-auto md:pb-6 transition-all transform duration-300 ease-out">
+            {/* Drag Handle (Mobile only styling detail) */}
+            <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-6 md:hidden"></div>
+
+            <div className="flex items-start justify-between mb-6">
+                <div>
+                    <h2 className="text-2xl font-bold text-gray-900 leading-tight">ผู้ป่วย</h2>
+                    <div className="flex items-center gap-1 text-gray-400 text-sm font-medium mt-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                            <path fillRule="evenodd" d="M9.69 18.933l.003.001C9.89 19.02 10 19 10 19s.11.02.308-.066l.002-.001.006-.003.018-.008a5.741 5.741 0 00.281-.14c.186-.096.446-.24.757-.433.62-.384 1.445-.966 2.274-1.765C15.302 14.988 17 12.493 17 9A7 7 0 103 9c0 3.492 1.698 5.988 3.355 7.584a13.731 13.731 0 002.273 1.765 11.842 11.842 0 00.976.544l.062.029.006.003.003.001zM10 13a4 4 0 100-8 4 4 0 000 8z" clipRule="evenodd" />
+                        </svg>
+                        <span>{markerPosition.lat.toFixed(5)}, {markerPosition.lng.toFixed(5)}</span>
+                    </div>
+                </div>
+                
+                <div className="text-right">
+                    <p className="text-sm text-gray-400 mb-0.5">ระยะห่าง</p>
+                    <p className={`text-2xl font-black ${distanceColor(currentDistance)}`}>
+                        {currentDistance < 1000 ? currentDistance.toFixed(0) : (currentDistance/1000).toFixed(2)} 
+                        <span className="text-sm font-normal text-gray-400 ml-1">{currentDistance < 1000 ? 'ม.' : 'กม.'}</span>
+                    </p>
+                </div>
+            </div>
+
+            {/* Action Button: Live Navigation */}
+            <button 
+                onClick={() => {
+                    if (!adminLocation) {
+                        alert("กำลังระบุตำแหน่งของคุณ... กรุณารอสักครู่");
+                        return;
+                    }
+                    setIsNavigating(!isNavigating);
+                }}
+                className={`w-full ${isNavigating ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white text-lg font-bold py-4 rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 group mb-3`}
+            >
+                {isNavigating ? (
+                    <>
+                    <span className="animate-pulse">🔴 กำลังนำทางสด...</span>
+                    <span className="text-sm font-normal opacity-80">(แตะเพื่อหยุด)</span>
+                    </>
+                ) : (
+                    <>
+                    <span>เริ่มนำทางสด (Live GPS)</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                    </svg>
+                    </>
+                )}
+            </button>
+            
+            {/* External Link */}
+            <button
+                onClick={() => {
+                    const originLat = adminLocation ? adminLocation.lat : safeZoneCenter.lat;
+                    const originLng = adminLocation ? adminLocation.lng : safeZoneCenter.lng;
+                    const url = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${markerPosition.lat},${markerPosition.lng}&travelmode=driving`;
+                    window.open(url, '_blank');
+                }}
+                className="w-full text-blue-600 font-medium py-2 rounded-lg hover:bg-blue-50 transition-all flex items-center justify-center gap-2 text-sm"
+            >
+                หรือเปิดใน Google Maps App (ไม่ Real-time) ↗
+            </button>
+
+            {/* Desktop Only: Save Config Button (Small link at bottom) */}
+            <div className="hidden md:block mt-4 text-center">
+                 <button
+                    onClick={async () => {
+                        const { error } = await supabase
+                            .from('safe_zones')
+                            .upsert({ 
+                                id: 'current_user_config', 
+                                center_lat: safeZoneCenter.lat, 
+                                center_lng: safeZoneCenter.lng,
+                                radius_1: SAFE_ZONE_WARNING,
+                                radius_2: SAFE_ZONE_DANGER
+                            });
+                        if (!error) alert("บันทึกจุดปลอดภัยเรียบร้อย!");
+                    }}
+                    className="text-xs text-blue-500 hover:text-blue-700 underline"
+                 >
+                    บันทึกตำแหน่ง Safe Zone ปัจจุบัน
+                 </button>
+            </div>
+          </div>
+        </>
+      )}
 
       <GoogleMap
         mapContainerStyle={containerStyle}
