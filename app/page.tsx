@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { GoogleMap, useJsApiLoader, Marker, Circle, DirectionsRenderer, OverlayView } from '@react-google-maps/api'
 import { supabase } from '@/lib/supabase'
 
@@ -43,6 +43,17 @@ export default function Home() {
   
   // State สำหรับล็อคหน้าจอ (Auto-Center) - ใช้สำหรับติดตามผู้ป่วย
   const [isAutoCenter, setIsAutoCenter] = useState(true)
+
+  // Map Options - Switch to Hybrid (Satellite) when Navigating
+  // Moved up to avoid "Order of Hooks" error
+  const mapOptions = useMemo<google.maps.MapOptions>(() => ({
+    disableDefaultUI: true, // ซ่อน UI เดิมของ Google Maps ทั้งหมด
+    clickableIcons: false,
+    scrollwheel: true,
+    mapTypeId: isNavigating ? 'hybrid' : 'roadmap', // เปลี่ยนเป็นดาวเทียมเมื่อนำทาง
+    tilt: isNavigating ? 45 : 0,
+    heading: isNavigating ? adminHeading : 0,
+  }), [isNavigating, adminHeading]);
   
   // Ref for accessing latest admin location inside callbacks without re-subscribing
   const adminLocationRef = useRef<google.maps.LatLngLiteral | null>(null);
@@ -320,47 +331,140 @@ export default function Home() {
     );
   }
 
-  return (
-    <div className="relative w-full h-screen bg-gray-100">
 
-      {/* --- HUD: Navigation Mode (Google Maps Style) --- */}
-      {isNavigating && routeSteps.length > 0 && routeSteps[currentStepIndex] ? (
+
+  return (
+    <div className="relative w-full h-screen bg-gray-100 font-sans">
+
+      {/* --- HUD: Navigation Mode (Google Maps Clone 100%) --- */}
+      {isNavigating ? (
         <>
-            {/* Top Green Banner */}
-            <div className="fixed top-0 left-0 right-0 z-[1100] bg-[#0F9D58] text-white p-4 pb-6 shadow-xl rounded-b-3xl">
-                <div className="flex items-start gap-4">
+            {/* 1. Top Green Banner (Direction) */}
+            <div className="fixed top-2 left-2 right-2 z-[1100] bg-[#006747] text-white p-4 rounded-xl shadow-lg flex items-center justify-between min-h-[100px]">
+                <div className="flex items-center gap-4 overflow-hidden">
                     {/* Direction Icon */}
-                    <div className="mt-1 opacity-90">
-                        {getManeuverIcon(routeSteps[currentStepIndex].maneuver)}
+                    <div className="flex-shrink-0 opacity-90">
+                        {routeSteps.length > 0 ? getManeuverIcon(routeSteps[currentStepIndex]?.maneuver) : (
+                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-12 h-12">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+                             </svg>
+                        )}
                     </div>
                     {/* Text Info */}
-                    <div className="flex-1">
-                        <div className="text-3xl font-bold mb-1">
-                             {distToNextStep < 1000 ? `${distToNextStep.toFixed(0)} ม.` : `${(distToNextStep/1000).toFixed(1)} กม.`}
+                    <div className="flex-1 min-w-0">
+                        <div className="text-2xl font-bold truncate">
+                             {routeSteps.length > 0 && routeSteps[currentStepIndex] 
+                                ? stripHtml(routeSteps[currentStepIndex].instructions) 
+                                : "มุ่งหน้าไปทางทิศเหนือ"}
                         </div>
-                        <div className="text-lg font-medium leading-snug opacity-95">
-                             {stripHtml(routeSteps[currentStepIndex].instructions)}
+                        {/* Distance to Turn (Optional Subtext if needed) */}
+                         <div className="text-lg opacity-80">
+                             อีก {distToNextStep < 1000 ? `${distToNextStep.toFixed(0)} ม.` : `${(distToNextStep/1000).toFixed(1)} กม.`}
                         </div>
                     </div>
+                </div>
+                
+                {/* Assistant Icon (Right) */}
+                <div className="flex-shrink-0 w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-md ml-2">
+                    <svg viewBox="0 0 24 24" className="w-6 h-6" fill="none">
+                        <path d="M6 12C6 15.3137 8.68629 18 12 18C14.6124 18 16.8349 16.3304 17.6586 14" stroke="#4285F4" strokeWidth="2.5" strokeLinecap="round"/>
+                        <path d="M17.6586 14C17.8809 13.3668 18 12.6953 18 12C18 8.68629 15.3137 6 12 6C9.28188 6 6.97448 7.80806 6.1969 10.3" stroke="#EA4335" strokeWidth="2.5" strokeLinecap="round"/>
+                        <path d="M6.1969 10.3C6.06822 10.8465 6 11.4162 6 12" stroke="#FBBC05" strokeWidth="2.5" strokeLinecap="round"/>
+                        <path d="M12 12L12 12.01" stroke="#34A853" strokeWidth="3" strokeLinecap="round"/>
+                    </svg>
                 </div>
             </div>
 
-            {/* Bottom Info Bar (Distance & Time) */}
-            <div className="fixed bottom-0 left-0 right-0 z-[1100] bg-white p-5 border-t border-gray-200 flex items-center justify-between shadow-[0_-5px_20px_rgba(0,0,0,0.1)]">
-                <div>
-                     <div className="text-2xl font-bold text-[#0F9D58]">
-                        {(currentDistance/1000).toFixed(1)} กม.
-                     </div>
-                     <div className="text-sm text-gray-400">
-                        ถึงใน {((currentDistance/1000) * 2).toFixed(0)} นาที (โดยประมาณ)
-                     </div>
+            {/* 2. Right Floating Buttons (Black Circles) */}
+            <div className="fixed right-4 top-[140px] z-[1000] flex flex-col gap-3">
+                 {/* Compass */}
+                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white/90">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-red-500">
+                        <path fillRule="evenodd" d="M11.54 22.351l.07.04.028.016a.76.76 0 00.723 0l.028-.015.071-.041a16.975 16.975 0 001.144-.742 19.58 19.58 0 002.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 00-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 002.682 2.282 16.975 16.975 0 001.145.742zM12 13.5a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                    </svg>
+                 </button>
+                 {/* Search */}
+                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 001.758 1.758z" />
+                    </svg>
+                 </button>
+                 {/* Mute */}
+                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                       <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+                    </svg>
+                 </button>
+                 {/* Alert */}
+                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                    </svg>
+                 </button>
+            </div>
+
+            {/* 3. "Re-center" Button (Bottom Left) */}
+            <div className="fixed left-4 bottom-36 z-[1000]">
+                 <button 
+                    onClick={() => {
+                        if (adminLocation && map) {
+                            map.panTo(adminLocation);
+                            map.setZoom(20);
+                            map.setHeading(adminHeading);
+                        }
+                    }}
+                    className="bg-[#202124] text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm font-medium"
+                 >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 text-white">
+                        <path fillRule="evenodd" d="M11.54 22.351l.07.04.028.016a.76.76 0 00.723 0l.028-.015.071-.041a16.975 16.975 0 001.144-.742 19.58 19.58 0 002.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 00-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 002.682 2.282 16.975 16.975 0 001.145.742zM12 13.5a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                    </svg>
+                    ปรับจุดกลาง
+                 </button>
+            </div>
+
+            {/* 4. Bottom Dark Panel */}
+            <div className="fixed bottom-0 left-0 right-0 z-[1100] bg-[#202124] text-white p-4 pb-8 rounded-t-2xl shadow-2xl border-t border-gray-800">
+                {/* Drag Handle */}
+                <div className="w-10 h-1 bg-gray-600 rounded-full mx-auto mb-4"></div>
+
+                <div className="flex items-center justify-between">
+                    {/* Time & Distance Info */}
+                    <div>
+                         <div className="flex items-baseline gap-2">
+                             <span className="text-3xl font-bold font-sans text-white">
+                                {((currentDistance/1000) * 2).toFixed(0)} นาที
+                             </span>
+                             {/* Leaf Icon */}
+                             <svg viewBox="0 0 24 24" className="w-5 h-5 text-green-500 fill-current mb-1">
+                                <path d="M12 2C7.5 2 3.5 5.5 3.5 10c0 6.5 8.5 12 8.5 12s8.5-5.5 8.5-12c0-4.5-4-8-8.5-8zm0 15c-1.5-3-4-5-4-8 0-2.5 2-4 4-4s4 1.5 4 4c0 3-2.5 5-4 8z" />
+                                <path d="M12 6c-2 0-3.5 1.5-3.5 3.5S10 13 12 13s3.5-1.5 3.5-3.5S14 6 12 6z" fillOpacity="0.3"/>
+                             </svg>
+                         </div>
+                         <div className="text-gray-400 text-base flex items-center gap-1 font-medium">
+                            <span>{(currentDistance/1000).toFixed(1)} กม.</span>
+                            <span>•</span>
+                            <span>{new Date(Date.now() + (currentDistance/1000)*2*60000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                         </div>
+                    </div>
+
+                    {/* Controls: Route & Exit */}
+                    <div className="flex items-center gap-3">
+                        {/* Route Option Button */}
+                        <button className="w-12 h-12 rounded-full bg-[#303134] flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6 text-white">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+                            </svg>
+                        </button>
+                        
+                        {/* Exit Button */}
+                        <button 
+                            onClick={() => setIsNavigating(false)}
+                            className="bg-[#D93025] hover:bg-[#d93025]/90 text-white px-6 py-3 rounded-full font-bold text-lg shadow-md min-w-[100px]"
+                        >
+                            ออก
+                        </button>
+                    </div>
                 </div>
-                <button 
-                    onClick={() => setIsNavigating(false)}
-                    className="bg-red-100 hover:bg-red-200 text-red-600 px-6 py-3 rounded-full font-bold text-lg transition-colors"
-                >
-                    ปิด (Exit)
-                </button>
             </div>
         </>
       ) : (
@@ -488,28 +592,18 @@ export default function Home() {
 
       <GoogleMap
         mapContainerStyle={containerStyle}
-        center={defaultCenter} // ใช้ center เริ่มต้น (map.panTo จะคุมต่อ)
-        zoom={16}
+        center={isNavigating && adminLocation ? adminLocation : markerPosition}
+        zoom={isNavigating ? 18 : 16}
         onLoad={onLoad}
         onUnmount={onUnmount}
-        onDragStart={() => setIsAutoCenter(false)} // ถ้าผู้ใช้ลากแผนที่ ให้ยกเลิก Auto Center ทันที
+        options={mapOptions}
         onClick={(e) => {
-            if (e.latLng) {
+            if (e.latLng && !isNavigating) {
                 setSafeZoneCenter({ lat: e.latLng.lat(), lng: e.latLng.lng() });
             }
         }}
-        options={{
-            disableDefaultUI: false,
-            zoomControl: true,
-            mapTypeControl: false,
-            fullscreenControl: false,
-            streetViewControl: false,
-            styles: [
-                {
-                    featureType: "poi",
-                    stylers: [{ visibility: "off" }]
-                }
-            ]
+        onDragStart={() => {
+            if (isAutoCenter) setIsAutoCenter(false);
         }}
       >
         {/* Patient Marker (Standard Google Pin) */}
