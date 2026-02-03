@@ -22,7 +22,9 @@ const SAFE_ZONE_DANGER = 50; // meters (Red) - Reduced for testing
 export default function Home() {
   const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
-    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''
+    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '',
+    language: 'th', // บังคับภาษาไทย
+    region: 'TH'
   })
 
   // State
@@ -43,6 +45,9 @@ export default function Home() {
   
   // State สำหรับล็อคหน้าจอ (Auto-Center) - ใช้สำหรับติดตามผู้ป่วย
   const [isAutoCenter, setIsAutoCenter] = useState(true)
+
+  // State สำหรับเสียง (Mute)
+  const [isMuted, setIsMuted] = useState(false)
 
   // Map Options - Switch to Hybrid (Satellite) when Navigating
   // Moved up to avoid "Order of Hooks" error
@@ -245,6 +250,65 @@ export default function Home() {
     }
   }
 
+  // State สำหรับโหมดจำลอง (Simulation Mode)
+  const [isSimulating, setIsSimulating] = useState(false)
+  const simulationInterval = useRef<NodeJS.Timeout | null>(null)
+
+  // Simulation Logic
+  useEffect(() => {
+    if (isSimulating && directionsResponse) {
+        // 1. Flatten all path points
+        const allPoints: google.maps.LatLng[] = [];
+        const legs = directionsResponse.routes[0].legs;
+        legs.forEach(leg => {
+            leg.steps.forEach(step => {
+                // step.path is array of LatLng
+                step.path.forEach(p => allPoints.push(p));
+            });
+        });
+
+        // 2. Start Interval
+        let i = 0;
+        // Find nearest point index to start (optional, simplistic start from 0 for now)
+        // Or start from where we are? For demo, start from 0 is fine or continue.
+        
+        setIsNavigating(true); // Auto start nav
+        if (isAutoCenter) setIsAutoCenter(false);
+
+        simulationInterval.current = setInterval(() => {
+            if (i >= allPoints.length) {
+                setIsSimulating(false);
+                return;
+            }
+            const p = allPoints[i];
+            const newPos = { lat: p.lat(), lng: p.lng() };
+            
+            // Update Admin Location
+            setAdminLocation(newPos);
+            
+            // Calculate Heading (simplistic)
+            if (i < allPoints.length - 1) {
+                const nextP = allPoints[i+1];
+                const heading = google.maps.geometry.spherical.computeHeading(p, nextP);
+                setAdminHeading(heading);
+            }
+
+            i += 1; // Speed multiplier (skip points for speed if needed)
+        }, 100); // 100ms update rate
+
+    } else {
+        // Stop Simulation
+        if (simulationInterval.current) {
+            clearInterval(simulationInterval.current);
+            simulationInterval.current = null;
+        }
+    }
+
+    return () => {
+        if (simulationInterval.current) clearInterval(simulationInterval.current);
+    }
+  }, [isSimulating, directionsResponse]);
+
   // อัปเดตตำแหน่ง Marker (Patient)
   const updateMarkerPosition = (lat: number, lng: number) => {
     const newPos = { lat, lng };
@@ -307,6 +371,7 @@ export default function Home() {
 
   // Helper: Strip HTML tags from instruction
   const stripHtml = (html: string) => {
+    if (typeof window === 'undefined') return html; // ป้องกัน Error ฝั่ง Server
     const tmp = document.createElement("DIV");
     tmp.innerHTML = html;
     return tmp.textContent || tmp.innerText || "";
@@ -383,26 +448,53 @@ export default function Home() {
 
             {/* 2. Right Floating Buttons (Black Circles) */}
             <div className="fixed right-4 top-[140px] z-[1000] flex flex-col gap-3">
-                 {/* Compass */}
-                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white/90">
+                 {/* Compass (Reset View) */}
+                 <button 
+                    onClick={() => {
+                        if(map) {
+                            map.setHeading(0);
+                            map.setTilt(0);
+                        }
+                    }}
+                    className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white/90 active:scale-90 transition-transform"
+                    title="ปรับทิศเหนือ"
+                 >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-red-500">
                         <path fillRule="evenodd" d="M11.54 22.351l.07.04.028.016a.76.76 0 00.723 0l.028-.015.071-.041a16.975 16.975 0 001.144-.742 19.58 19.58 0 002.683-2.282c1.944-1.99 3.963-4.98 3.963-8.827a8.25 8.25 0 00-16.5 0c0 3.846 2.02 6.837 3.963 8.827a19.58 19.58 0 002.682 2.282 16.975 16.975 0 001.145.742zM12 13.5a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
                     </svg>
                  </button>
+                 
                  {/* Search */}
-                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white">
+                 <button 
+                    onClick={() => alert("ระบบค้นหาสถานที่ใกล้เคียง (Coming Soon)")}
+                    className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white active:scale-90 transition-transform"
+                 >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 001.758 1.758z" />
                     </svg>
                  </button>
-                 {/* Mute */}
-                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
-                       <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
-                    </svg>
+                 
+                 {/* Mute Toggle */}
+                 <button 
+                    onClick={() => setIsMuted(!isMuted)}
+                    className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white active:scale-90 transition-transform"
+                 >
+                    {isMuted ? (
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 text-gray-400">
+                           <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+                        </svg>
+                    ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
+                        </svg>
+                    )}
                  </button>
+                 
                  {/* Alert */}
-                 <button className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white">
+                 <button 
+                    onClick={() => alert("ระบบแจ้งเตือนอุบัติเหตุ (Coming Soon)")}
+                    className="w-10 h-10 bg-[#202124] rounded-full flex items-center justify-center shadow-lg text-white active:scale-90 transition-transform"
+                 >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
                     </svg>
@@ -436,21 +528,29 @@ export default function Home() {
                 <div className="flex items-center justify-between">
                     {/* Time & Distance Info */}
                     <div>
-                         <div className="flex items-baseline gap-2">
-                             <span className="text-3xl font-bold font-sans text-white">
-                                {((currentDistance/1000) * 2).toFixed(0)} นาที
-                             </span>
-                             {/* Leaf Icon */}
-                             <svg viewBox="0 0 24 24" className="w-5 h-5 text-green-500 fill-current mb-1">
-                                <path d="M12 2C7.5 2 3.5 5.5 3.5 10c0 6.5 8.5 12 8.5 12s8.5-5.5 8.5-12c0-4.5-4-8-8.5-8zm0 15c-1.5-3-4-5-4-8 0-2.5 2-4 4-4s4 1.5 4 4c0 3-2.5 5-4 8z" />
-                                <path d="M12 6c-2 0-3.5 1.5-3.5 3.5S10 13 12 13s3.5-1.5 3.5-3.5S14 6 12 6z" fillOpacity="0.3"/>
-                             </svg>
-                         </div>
-                         <div className="text-gray-400 text-base flex items-center gap-1 font-medium">
-                            <span>{(currentDistance/1000).toFixed(1)} กม.</span>
-                            <span>•</span>
-                            <span>{new Date(Date.now() + (currentDistance/1000)*2*60000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-                         </div>
+                         {directionsResponse?.routes[0]?.legs[0] ? (
+                            <>
+                                <div className="flex items-baseline gap-2">
+                                     <span className="text-3xl font-bold font-sans text-white">
+                                        {Math.ceil((directionsResponse.routes[0].legs[0].duration?.value || 0) / 60)} นาที
+                                     </span>
+                                     {/* Leaf Icon */}
+                                     <svg viewBox="0 0 24 24" className="w-5 h-5 text-green-500 fill-current mb-1">
+                                        <path d="M12 2C7.5 2 3.5 5.5 3.5 10c0 6.5 8.5 12 8.5 12s8.5-5.5 8.5-12c0-4.5-4-8-8.5-8zm0 15c-1.5-3-4-5-4-8 0-2.5 2-4 4-4s4 1.5 4 4c0 3-2.5 5-4 8z" />
+                                        <path d="M12 6c-2 0-3.5 1.5-3.5 3.5S10 13 12 13s3.5-1.5 3.5-3.5S14 6 12 6z" fillOpacity="0.3"/>
+                                     </svg>
+                                </div>
+                                <div className="text-gray-400 text-base flex items-center gap-1 font-medium">
+                                    <span>{directionsResponse.routes[0].legs[0].distance?.text}</span>
+                                    <span>•</span>
+                                    <span>ถึง {new Date(Date.now() + (directionsResponse.routes[0].legs[0].duration?.value || 0) * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} น.</span>
+                                </div>
+                            </>
+                         ) : (
+                            <div className="flex flex-col justify-center h-full">
+                                <span className="text-lg font-bold text-white animate-pulse">กำลังคำนวณ...</span>
+                            </div>
+                         )}
                     </div>
 
                     {/* Controls: Route & Exit */}
@@ -559,6 +659,39 @@ export default function Home() {
                 )}
             </button>
             
+            {/* Start Simulation Mode (For Demo) */}
+            <button 
+                onClick={() => {
+                   if (!directionsResponse) {
+                       // If no route, calc one first from current location to patient
+                       const origin = adminLocation || safeZoneCenter; // fallback
+                       calculateRoute(origin, markerPosition);
+                       
+                       // Wait a bit for route to calc then start
+                       setTimeout(() => setIsSimulating(!isSimulating), 1000);
+                   } else {
+                       setIsSimulating(!isSimulating);
+                   }
+                }}
+                className={`w-full ${isSimulating ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'} font-bold py-3 rounded-xl shadow-sm transition flex items-center justify-center gap-2 border border-gray-200 mb-3`}
+            >
+                {isSimulating ? (
+                    <>
+                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 animate-spin">
+                        <path fillRule="evenodd" d="M4.755 10.059a7.5 7.5 0 0112.548-3.364l1.903 1.903h-3.183a.75.75 0 100 1.5h4.992a.75.75 0 00.75-.75V4.356a.75.75 0 00-1.5 0v3.18l-1.9-1.9A9 9 0 003.306 9.67a.75.75 0 101.45.388zm15.408 3.352a.75.75 0 00-.919.53 7.5 7.5 0 01-12.548 3.364l-1.902-1.903h3.183a.75.75 0 000-1.5H2.984a.75.75 0 00-.75.75v4.992a.75.75 0 001.5 0v-3.18l1.9 1.9a9 9 0 0015.059-4.035.75.75 0 00-.53-.918z" clipRule="evenodd" />
+                     </svg>
+                     <span>หยุดจำลอง (Stop Demo)</span>
+                    </>
+                ) : (
+                    <>
+                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-indigo-600">
+                        <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
+                     </svg>
+                     <span>ทดสอบจำลองการขับขี่ (Simulation Demo)</span>
+                    </>
+                )}
+            </button>
+
             {/* External Link */}
             {/* External App Link */}
             <button 
@@ -568,9 +701,9 @@ export default function Home() {
                     const url = `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLng}&destination=${markerPosition.lat},${markerPosition.lng}&travelmode=driving`;
                     window.open(url, '_blank');
                 }}
-                className="mt-3 w-full bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold py-3 rounded-xl shadow-sm transition flex items-center justify-center gap-2 border border-blue-200"
+                className="w-full bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold py-3 rounded-xl shadow-sm transition flex items-center justify-center gap-2 border border-blue-200"
             >
-                <span>เปิดการนำทางเต็มรูปแบบ</span>
+                <span>เปิดการนำทางใน Google Maps</span>
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                 </svg>
