@@ -335,14 +335,14 @@ export default function Home() {
     return (brng + 360) % 360;
   };
 
-  // Helper: ฟังก์ชันติดตามผู้ป่วย (Camera Following)
+  // Helper: ฟังก์ชันติดตามผู้ป่วย (Camera Following) - ปรับมุมมองนำทางเป๊ะๆ
   const followPatient = (newPos: google.maps.LatLngLiteral, heading: number) => {
     if (map) {
       map.moveCamera({
         center: newPos,
-        heading: heading, // หมุนแผนที่ตามทิศทางที่เขาขยับ
-        tilt: 45,         // ล็อกมุมมองแบบเฉียง
-        zoom: 18          // ซูมเข้าไปให้เห็นถนนชัดเจน
+        heading: heading, // หมุนหน้าแผนที่ไปตามทิศที่เดินจริง
+        tilt: 55,         // ปรับมุมก้มให้เป็น 3D (เป๊ะตามรูป Reference)
+        zoom: 19          // ซูมระดับเห็นพื้นถนนชัดเจน
       });
     }
   };
@@ -490,46 +490,43 @@ export default function Home() {
       {/* --- HUD: Driver Mode (Navigation - Google Maps Clone) --- */}
       {isNavigating ? (
         <>
-            {/* 1. Top Green Banner (Current Instruction + Next Step) */}
-            <div className="fixed top-2 left-2 right-2 z-[1100] flex flex-col gap-1 items-start">
-                
+            {/* 1. Top Green Banner (Current Instruction + Next Step) - Compact Version */}
+            <div className="fixed top-2 left-2 right-2 z-[1100] flex flex-col gap-1 items-start max-w-lg mx-auto w-full">
                 {/* Main Instruction Card */}
-                <div className="bg-[#006747] text-white p-4 rounded-xl shadow-lg flex items-center justify-between min-h-[100px] w-full relative overflow-hidden">
-                    <div className="flex items-center gap-4 w-full">
-                        
+                <div className="bg-[#006747] text-white p-3 rounded-lg shadow-lg flex items-center justify-between min-h-[80px] w-full relative overflow-hidden">
+                    <div className="flex items-center gap-3 w-full">
                         {/* Turn Icon & Distance (Left Cluster) */}
-                        <div className="flex flex-col items-center justify-center min-w-[70px]">
-                             <div className="mb-1 transform scale-110">
+                        <div className="flex flex-col items-center justify-center min-w-[60px]">
+                             <div className="mb-0.5 transform scale-90">
                                 {routeSteps.length > 0 ? getManeuverIcon(routeSteps[currentStepIndex]?.maneuver) : (
-                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" className="w-10 h-10">
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
                                     </svg>
                                 )}
                              </div>
-                             <div className="text-xl font-bold font-sans tracking-tight">
+                             <div className="text-lg font-bold font-sans tracking-tight leading-none">
                                 {distToNextStep < 1000 ? `${distToNextStep.toFixed(0)} ม.` : `${(distToNextStep/1000).toFixed(1)} กม.`}
                              </div>
                         </div>
-
-                        {/* Text Instruction (Large) */}
-                        <div className="flex-1 border-l border-white/20 pl-4 h-16 flex items-center">
-                            <h2 className="text-3xl font-bold leading-tight tracking-tight line-clamp-2">
+                        {/* Text Instruction (Compact) */}
+                        <div className="flex-1 border-l border-white/20 pl-3 min-h-[50px] flex items-center">
+                            <h2 className="text-xl font-bold leading-snug tracking-tight line-clamp-2">
                                  {routeSteps.length > 0 && routeSteps[currentStepIndex] 
                                     ? stripHtml(routeSteps[currentStepIndex].instructions) 
                                     : "ขับตามเส้นทาง"}
                             </h2>
                         </div>
                     </div>
-                    
-
                 </div>
 
                 {/* Secondary 'Then' Step (Small Green Box below) */}
                 {routeSteps.length > currentStepIndex + 1 && (
-                    <div className="bg-[#004D35] text-white/90 px-4 py-2 rounded-lg shadow-md flex items-center gap-2 animate-slide-in-down ml-1 mt-1">
-                        <span className="text-sm font-medium opacity-80">แล้ว</span>
-                        {getManeuverIcon(routeSteps[currentStepIndex + 1]?.maneuver)}
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5 transform rotate-180 opacity-60">
+                    <div className="bg-[#004D35] text-white/90 px-3 py-1.5 rounded-md shadow-md flex items-center gap-2 animate-slide-in-down ml-1 mt-0.5">
+                        <span className="text-xs font-medium opacity-80">แล้ว</span>
+                        <div className="transform scale-75 origin-center">
+                            {getManeuverIcon(routeSteps[currentStepIndex + 1]?.maneuver)}
+                        </div>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 transform rotate-180 opacity-60">
                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
                         </svg>
                     </div>
@@ -576,30 +573,30 @@ export default function Home() {
                  )}
             </div>
 
-            {/* 5. Bottom Info Panel (Google Maps Style: White) */}
-            <div className="fixed bottom-0 left-0 right-0 z-[1100] bg-white text-gray-900 p-5 pb-10 rounded-t-3xl shadow-[0_-5px_30px_rgba(0,0,0,0.15)]">
+            {/* 5. Bottom Info Panel (Google Maps Style: White - Compact) */}
+            <div className="fixed bottom-0 left-0 right-0 z-[1100] bg-white text-gray-900 p-4 pb-6 rounded-t-2xl shadow-[0_-5px_30px_rgba(0,0,0,0.15)]">
                 {/* Drag Handle */}
-                <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-6"></div>
+                <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3"></div>
 
-                <div className="flex items-center justify-between px-2">
+                <div className="flex items-center justify-between px-1">
                     {/* Left: Time & Distance */}
-                    <div className="flex flex-col gap-1">
-                        <div className="flex items-baseline gap-3">
-                             {/* Duration (Green & Big) */}
-                             <span className="text-5xl font-bold text-[#188038] tracking-tight font-sans">
+                    <div className="flex flex-col gap-0.5">
+                        <div className="flex items-baseline gap-2">
+                             {/* Duration (Green & Compact) */}
+                             <span className="text-4xl font-bold text-[#188038] tracking-tight font-sans text-shadow-sm">
                                 {directionsResponse?.routes[0]?.legs[0]?.duration?.value 
                                     ? Math.ceil(directionsResponse.routes[0].legs[0].duration.value / 60) 
-                                    : 0} <span className="text-2xl font-semibold text-gray-600">นาที</span>
+                                    : 0} <span className="text-xl font-semibold text-gray-600">นาที</span>
                              </span>
                         </div>
                         
-                        <div className="flex items-center gap-2 text-lg text-gray-500 font-medium">
+                        <div className="flex items-center gap-2 text-base text-gray-500 font-medium">
                              {/* Distance */}
                              <span>
                                 {directionsResponse?.routes[0]?.legs[0]?.distance?.text || '0 กม.'}
                              </span>
                              <span className="text-gray-300">•</span>
-                             {/* ETA Time */}
+                             {/* ETA Time (Mockup logic) */}
                              <span>
                                 {directionsResponse?.routes[0]?.legs[0]?.duration?.value 
                                     ? new Date(Date.now() + directionsResponse.routes[0].legs[0].duration.value * 1000).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
@@ -608,12 +605,11 @@ export default function Home() {
                         </div>
                     </div>
 
-                    {/* Right: Actions (Only Exit) */}
-                    <div className="flex items-center gap-4">
-                        {/* Exit Button (Red Pill) */}
+                    {/* Right: Exit Button (Compact) */}
+                    <div className="flex items-center gap-3">
                         <button 
                             onClick={() => setIsNavigating(false)}
-                            className="bg-[#D93025] hover:bg-[#B31412] text-white px-8 py-3.5 rounded-full font-bold text-lg shadow-md transition-all active:scale-95 min-w-[100px]"
+                            className="bg-[#D93025] hover:bg-[#B31412] text-white px-6 py-2 rounded-full font-bold text-base shadow-md transition-colors border border-transparent active:scale-95 min-w-[80px]"
                         >
                             ออก
                         </button>
