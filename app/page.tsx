@@ -347,15 +347,40 @@ export default function Home() {
     }
   };
 
-  // อัปเดตตำแหน่ง Marker (Patient)
+  // Helper: คำนวณระยะทางระหว่างจุด 2 จุด (หน่วย: เมตร)
+  const getDistanceMeters = (p1: google.maps.LatLngLiteral, p2: google.maps.LatLngLiteral) => {
+    const R = 6371e3; // รัศมีโลก (เมตร)
+    const toRad = (d: number) => d * Math.PI / 180;
+    const lat1 = toRad(p1.lat);
+    const lat2 = toRad(p2.lat);
+    const dLat = toRad(p2.lat - p1.lat);
+    const dLng = toRad(p2.lng - p1.lng);
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1) * Math.cos(lat2) *
+              Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  // อัปเดตตำแหน่ง Marker (Patient) - ปรับปรุงใหม่ให้เสถียร (Smooth & Stable)
   const updateMarkerPosition = (lat: number, lng: number) => {
     const newPos = { lat, lng };
     const prevPos = prevMarkerPosRef.current;
     
-    // คำนวณ Heading ถ้ามีตำแหน่งเก่า
+    // 1. Noise Filter: เช็คระยะทางก่อนว่าควรขยับไหม?
+    let dist = 0;
     let heading = 0;
-    if (prevPos && prevPos.lat !== newPos.lat && prevPos.lng !== newPos.lng) {
-        heading = calculateHeading(prevPos, newPos);
+    
+    if (prevPos) {
+        dist = getDistanceMeters(prevPos, newPos);
+        
+        // ถ้าขยับน้อยกว่า 2 เมตร ถือว่าเป็น GPS Noise -> ไม่ทำอะไรเลย (นิ่งๆ ไว้)
+        if (dist < 2) return;
+
+        // คำนวณ Heading
+        if (prevPos.lat !== newPos.lat || prevPos.lng !== newPos.lng) {
+            heading = calculateHeading(prevPos, newPos);
+        }
     }
 
     setMarkerPosition(newPos);
@@ -366,9 +391,13 @@ export default function Home() {
     localStorage.setItem('lastPatientLat', lat.toString());
     localStorage.setItem('lastPatientLng', lng.toString());
     
-    // Smart Auto-Center Logic
+    // 2. Smart Camera Follow: กล้องจะตามก็ต่อเมื่อขยับเยอะพอสมควร หรือ Heading เปลี่ยนชัดเจน
+    // ช่วยลดอาการ "เด้งไปเด้งมา" (Jitter)
     if (isAutoCenter && !isNavigating) {
-       followPatient(newPos, heading || (map ? map.getHeading() || 0 : 0));
+       // ขยับกล้องก็ต่อเมื่อระยะทาง > 5 เมตร หรือเพิ่งเริ่ม (ไม่มี prevPos)
+       if (!prevPos || dist > 5) {
+            followPatient(newPos, heading || (map ? map.getHeading() || 0 : 0));
+       } 
     }
   }
 
@@ -436,7 +465,7 @@ export default function Home() {
   // Speak welcome message
   useEffect(() => {
     if (isNavigating) {
-        speak("เริ่มนำทาง ขอให้เดินทางโดยสวัสดิภาพ");
+        speak("เริ่มนำทาง");
     } else {
         window.speechSynthesis.cancel(); 
     }
