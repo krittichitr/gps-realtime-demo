@@ -100,7 +100,8 @@ export default function Home() {
 
   // Effect สำหรับโหมดนำทาง (Driver Mode)
   useEffect(() => {
-    if (isNavigating && adminLocation && map) {
+    // ทำงานเฉพาะเมื่อกำลังนำทาง (Navigating) + มีตำแหน่ง Admin + และเปิด Auto Center อยู่
+    if (isNavigating && adminLocation && map && isAutoCenter) {
         // 1. ย้ายกล้องไปหา Admin (ตัวคุณ)
         map.panTo(adminLocation);
         
@@ -109,10 +110,9 @@ export default function Home() {
         map.setTilt(45); // เอียง 3D
         map.setHeading(adminHeading); // หมุนตามเข็มทิศ
         
-        // 3. ปิด Auto-Center ของผู้ป่วยชั่วคราว เพื่อไม่ให้กล้องตีกัน
-        if (isAutoCenter) setIsAutoCenter(false);
+        // 3. (ลบ logic เก่าที่ปิด auto-center อัตโนมัติทิ้งไป เพราะตอนนี้เราต้องการให้มัน open จนกว่าจะ drag)
     }
-  }, [isNavigating, adminLocation, adminHeading, map]);
+  }, [isNavigating, adminLocation, adminHeading, map, isAutoCenter]); // เพิ่ม isAutoCenter ใน dependency
 
   // ฟังก์ชันคำนวณระยะทาง
   const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -505,6 +505,7 @@ export default function Home() {
             <div className="fixed left-4 bottom-36 z-[1000]">
                  <button 
                     onClick={() => {
+                        setIsAutoCenter(true); // 1. เปิดกลับมาเป็น True เพื่อให้ Effect ทำงานต่อ
                         if (adminLocation && map) {
                             map.panTo(adminLocation);
                             map.setZoom(20);
@@ -752,7 +753,7 @@ export default function Home() {
         {/* Patient Marker (Standard Google Pin) */}
         <Marker 
             position={markerPosition} 
-            animation={window.google?.maps?.Animation?.DROP}
+            // animation={window.google?.maps?.Animation?.DROP} // เอาออกเพื่อให้ขยับสมูท ไม่เด้งลงมาจากฟ้าทุกครั้ง
         />
 
         {/* Marker แสดงตำแหน่งผู้ดูแล (Admin) - สีน้ำเงิน */}

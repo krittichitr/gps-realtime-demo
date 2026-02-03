@@ -76,6 +76,11 @@ export default function Sender() {
     }
   }
 
+  // Ref for throttling updates
+  const lastSentRef = useRef<number>(0);
+
+  // ... (existing code)
+
   const sendLocation = async () => {
     // 1. Activate Keep-Alive Mechanisms
     await requestWakeLock();
@@ -97,6 +102,13 @@ export default function Sender() {
         // 3. เริ่มติดตามการเคลื่อนที่
         navigator.geolocation.watchPosition(async (position) => {
           const { latitude, longitude } = position.coords;
+          const now = Date.now();
+
+          // Throttling: ส่งข้อมูลสูงสุดทุกๆ 2 วินาที (ป้องกันการรัว)
+          if (now - lastSentRef.current < 2000) {
+              return; 
+          }
+          lastSentRef.current = now;
 
           // เช็คระยะห่างจากจุดเริ่มต้น (startLat, startLng)
           checkGeofence(latitude, longitude, startLat, startLng);
