@@ -8,9 +8,8 @@ export default function Sender() {
   const [distance, setDistance] = useState<number | null>(null)
   const [homePos, setHomePos] = useState({ lat: 13.7649, lng: 100.5383 }) // Default fallback
 
-  // Wake Lock & Audio Ref for Background Execution
+  // Wake Lock Ref for Background Execution
   const wakeLock = useRef<any>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
 
   // ฟังก์ชันขอ Screen Wake Lock (ป้องกันหน้าจอดับ)
   const requestWakeLock = async () => {
@@ -84,9 +83,6 @@ export default function Sender() {
   const sendLocation = async () => {
     // 1. Activate Keep-Alive Mechanisms
     await requestWakeLock();
-    if (audioRef.current) {
-        audioRef.current.play().catch(e => console.log("Audio play failed:", e));
-    }
 
     if ("geolocation" in navigator) {
       setStatus("กำลังระบุจุดเริ่มต้น (Safe Zone)...");
@@ -167,14 +163,6 @@ export default function Sender() {
         <p className="mt-4 text-xs text-gray-400">
             *กรุณาเปิดหน้าจอนี้ค้างไว้เพื่อการส่งสัญญาณที่ต่อเนื่อง (ระบบจะป้องกันหน้าจอดับอัตโนมัติ)
         </p>
-
-        {/* Hidden Audio for Background Keep-Alive */}
-        <audio 
-            ref={audioRef} 
-            loop 
-            src="https://assets.mixkit.co/active_storage/sfx/212/212.wav" 
-            className="hidden" 
-        />
       </div>
     </div>
   );

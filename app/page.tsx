@@ -19,6 +19,46 @@ const defaultCenter = {
 const SAFE_ZONE_WARNING = 20; // meters (Yellow) - Reduced for testing
 const SAFE_ZONE_DANGER = 50; // meters (Red) - Reduced for testing
 
+// Hook: Interpolate Position (Lerp) for Smoothness
+const useSmoothPosition = (target: google.maps.LatLngLiteral | null) => {
+  const [current, setCurrent] = useState(target);
+  const targetRef = useRef(target);
+
+  useEffect(() => {
+     targetRef.current = target;
+  }, [target]);
+
+  useEffect(() => {
+    let request: number;
+    const animate = () => {
+      setCurrent((prev) => {
+        if (!prev) return targetRef.current;
+        if (!targetRef.current) return prev;
+
+        const dLat = targetRef.current.lat - prev.lat;
+        const dLng = targetRef.current.lng - prev.lng;
+
+        // Threshold to stop animating
+        if (Math.abs(dLat) < 0.000005 && Math.abs(dLng) < 0.000005) {
+             return prev; 
+        }
+
+        // Lerp factor 0.15 (Adjust for speed/smoothness)
+        return {
+          lat: prev.lat + dLat * 0.15, 
+          lng: prev.lng + dLng * 0.15
+        };
+      });
+      request = requestAnimationFrame(animate);
+    };
+    
+    request = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(request);
+  }, []);
+
+  return current;
+};
+
 export default function Home() {
   const { isLoaded, loadError } = useJsApiLoader({
     id: 'google-map-script',
@@ -38,6 +78,9 @@ export default function Home() {
   const [safeZoneCenter, setSafeZoneCenter] = useState(defaultCenter)
   // State สำหรับตำแหน่งผู้ดูแล (Admin)
   const [adminLocation, setAdminLocation] = useState<google.maps.LatLngLiteral | null>(null)
+  // ใช้ Hook เพื่อทำให้ตำแหน่งผู้ดูแล (Admin) ขยับเนียนขึ้น (Smooth Interpolation)
+  const smoothAdminLocation = useSmoothPosition(adminLocation); 
+
   const [adminHeading, setAdminHeading] = useState<number>(0) // เข็มทิศ
   
   // State สำหรับโหมดนำทาง (Driver Mode)
@@ -108,19 +151,17 @@ export default function Home() {
 
   // Effect สำหรับโหมดนำทาง (Driver Mode)
   useEffect(() => {
-    // ทำงานเฉพาะเมื่อกำลังนำทาง (Navigating) + มีตำแหน่ง Admin + และเปิด Auto Center อยู่
-    if (isNavigating && adminLocation && map && isAutoCenter) {
-        // 1. ย้ายกล้องไปหา Admin (ตัวคุณ)
-        map.panTo(adminLocation);
-        
-        // 2. ปรับมุมกล้องให้เหมือน GPS
-        map.setZoom(20); // Zoom ใกล้สุด
-        map.setTilt(45); // เอียง 3D
-        map.setHeading(adminHeading); // หมุนตามเข็มทิศ
-        
-        // 3. (ลบ logic เก่าที่ปิด auto-center อัตโนมัติทิ้งไป เพราะตอนนี้เราต้องการให้มัน open จนกว่าจะ drag)
+    // ทำงานเฉพาะเมื่อกำลังนำทาง (Navigating) + มีตำแหน่ง Admin (Smooth) + และเปิด Auto Center อยู่
+    if (isNavigating && smoothAdminLocation && map && isAutoCenter) {
+        // ใช้ moveCamera แทน panTo เพื่อความลื่นไหล (60fps animation)
+        map.moveCamera({
+            center: smoothAdminLocation,
+            heading: adminHeading,
+            tilt: 45,
+            zoom: 20
+        });
     }
-  }, [isNavigating, adminLocation, adminHeading, map, isAutoCenter]); // เพิ่ม isAutoCenter ใน dependency
+  }, [isNavigating, smoothAdminLocation, adminHeading, map, isAutoCenter]);
 
   // ฟังก์ชันคำนวณระยะทาง
   const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -233,6 +274,9 @@ export default function Home() {
   //   );
   // };
 
+  // Ref สำหรับ Throttle การคำนวณเส้นทาง (เพื่อประหยัด Quota API)
+  const lastRouteCalcTimeRef = useRef<number>(0);
+
   // Status Logic
   const getStatus = (distance: number) => {
     if (distance > SAFE_ZONE_DANGER) return { label: "อันตราย: ออกนอกเขต!", color: "bg-red-600", pulse: "animate-ping" };
@@ -251,8 +295,13 @@ export default function Home() {
     
     // ถ้าเป็นระยะ Danger ให้คำนวณเส้นทางใหม่ทันที (หรือถ้ากำลังนำทางอยู่ก็ต้องคำนวณตลอด)
     if (distance > SAFE_ZONE_DANGER || isNavigating) {
-        const origin = adminLocationRef.current || safeZoneCenter;
-        calculateRoute(origin, { lat, lng });
+        const now = Date.now();
+        // Throttle: คำนวณใหม่ทุกๆ 10 วินาทีพอ (เพื่อไม่ให้เปลือง Quota Google Maps API)
+        if (now - lastRouteCalcTimeRef.current > 10000) {
+            const origin = adminLocationRef.current || safeZoneCenter;
+            calculateRoute(origin, { lat, lng });
+            lastRouteCalcTimeRef.current = now;
+        }
     } else {
         if (!isNavigating) setDirectionsResponse(null); // ถ้าไม่ได้นำทาง และปลอดภัย ให้ลบเส้น
     }
@@ -454,11 +503,19 @@ export default function Home() {
     window.speechSynthesis.speak(utterance);
   };
 
+  // Ref to track last spoken instruction
+  const lastSpokenRef = useRef<string>("");
+
   // Speak when instruction changes
   useEffect(() => {
     if (isNavigating && routeSteps.length > 0 && routeSteps[currentStepIndex]) {
         const text = stripHtml(routeSteps[currentStepIndex].instructions);
-        speak(text);
+        
+        // Only speak if different from last time to prevent repetition
+        if (text !== lastSpokenRef.current) {
+            speak(text);
+            lastSpokenRef.current = text;
+        }
     }
   }, [currentStepIndex, isNavigating, routeSteps]); // stripHtml is stable/const
 
@@ -789,7 +846,7 @@ export default function Home() {
         {/* Marker แสดงตำแหน่งผู้ดูแล (Admin) - สีน้ำเงิน */}
         {adminLocation && window.google && (
           <Marker
-            position={adminLocation}
+            position={smoothAdminLocation || adminLocation}
             icon={{
               path: window.google.maps.SymbolPath.CIRCLE,
               fillColor: "#4285F4", // สีฟ้า Google
@@ -845,19 +902,6 @@ export default function Home() {
                 strokeColor: "#2977F5", // ฟ้าสด Google Maps
                 strokeWeight: 8,        // เส้นหนาชัดเจน
                 strokeOpacity: 0.9,     // เกือบทึบ
-                icons: [{
-                    icon: {
-                        // @ts-ignore
-                        path: window.google?.maps?.SymbolPath?.FORWARD_CLOSED_ARROW,
-                        scale: 2.5,          // ขนาดลูกศร
-                        strokeColor: '#ffffff', // สีขาว
-                        strokeWeight: 1,
-                        fillColor: '#ffffff',
-                        fillOpacity: 1
-                    },
-                    offset: '0',
-                    repeat: '70px' // ระยะห่างระหว่างลูกศร
-                }]
               },
               // [เป๊ะ 2] ปิด Marker เริ่มต้นของ Google เพื่อใช้ Marker รูปคน/Blue Dot ที่เราทำไว้เอง
               suppressMarkers: true, 
