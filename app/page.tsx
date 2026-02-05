@@ -19,41 +19,66 @@ const defaultCenter = {
 const SAFE_ZONE_WARNING = 20; // meters (Yellow) - Reduced for testing
 const SAFE_ZONE_DANGER = 50; // meters (Red) - Reduced for testing
 
-// Hook: Interpolate Position (Lerp) for Smoothness
+// Hook: Interpolate Position (Time-based) for Smoothness (1-2 seconds)
 const useSmoothPosition = (target: google.maps.LatLngLiteral | null) => {
   const [current, setCurrent] = useState(target);
-  const targetRef = useRef(target);
+  const animationRef = useRef<{
+    start: google.maps.LatLngLiteral;
+    end: google.maps.LatLngLiteral;
+    startTime: number;
+    duration: number;
+  } | null>(null);
 
   useEffect(() => {
-     targetRef.current = target;
+    if (!target) return;
+    
+    setCurrent((prev) => {
+      // If first time (no prev), snap to target
+      if (!prev) return target;
+
+      // Start new animation
+      animationRef.current = {
+        start: prev,
+        end: target,
+        startTime: performance.now(),
+        duration: 1500 // 1.5 วินาที ตามที่ขอ (1-2s)
+      };
+      
+      return prev; 
+    });
   }, [target]);
 
   useEffect(() => {
-    let request: number;
-    const animate = () => {
-      setCurrent((prev) => {
-        if (!prev) return targetRef.current;
-        if (!targetRef.current) return prev;
-
-        const dLat = targetRef.current.lat - prev.lat;
-        const dLng = targetRef.current.lng - prev.lng;
-
-        // Threshold to stop animating
-        if (Math.abs(dLat) < 0.000005 && Math.abs(dLng) < 0.000005) {
-             return prev; 
-        }
-
-        // Lerp factor 0.15 (Adjust for speed/smoothness)
-        return {
-          lat: prev.lat + dLat * 0.15, 
-          lng: prev.lng + dLng * 0.15
-        };
-      });
-      request = requestAnimationFrame(animate);
-    };
+    let requestIdx: number;
     
-    request = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(request);
+    const animate = (time: number) => {
+      if (animationRef.current) {
+        const { start, end, startTime, duration } = animationRef.current;
+        const elapsed = time - startTime;
+        
+        if (elapsed < duration) {
+           // Linear Interpolation over time
+           const progress = elapsed / duration;
+           // Optional: Ease-out cubic for nicer feel: 1 - Math.pow(1 - progress, 3)
+           // But Linear is requested "Interpolation... 1-2 sec"
+           // Let's use a slight ease-out for natural movement
+           const ease = 1 - Math.pow(1 - progress, 3); 
+           
+           const lat = start.lat + (end.lat - start.lat) * ease;
+           const lng = start.lng + (end.lng - start.lng) * ease;
+           
+           setCurrent({ lat, lng });
+        } else {
+           // Finish
+           setCurrent(end);
+           animationRef.current = null;
+        }
+      }
+      requestIdx = requestAnimationFrame(animate);
+    };
+
+    requestIdx = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(requestIdx);
   }, []);
 
   return current;
@@ -74,14 +99,22 @@ export default function Home() {
   const [directionsResponse, setDirectionsResponse] = useState<google.maps.DirectionsResult | null>(null)
   const [currentDistance, setCurrentDistance] = useState(0)
   
+  // State สำหรับเวลา ETA
+  const [destinationTime, setDestinationTime] = useState<Date | null>(null);
+  const [etaText, setEtaText] = useState("--:--");
+  const [durationText, setDurationText] = useState("0");
+  
   // เพิ่ม state สำหรับจุดศูนย์กลาง Safe Zone ที่เปลี่ยนได้
   const [safeZoneCenter, setSafeZoneCenter] = useState(defaultCenter)
   // State สำหรับตำแหน่งผู้ดูแล (Admin)
   const [adminLocation, setAdminLocation] = useState<google.maps.LatLngLiteral | null>(null)
   // ใช้ Hook เพื่อทำให้ตำแหน่งผู้ดูแล (Admin) ขยับเนียนขึ้น (Smooth Interpolation)
   const smoothAdminLocation = useSmoothPosition(adminLocation); 
-
   const [adminHeading, setAdminHeading] = useState<number>(0) // เข็มทิศ
+
+  // Smooth Patient Logic
+  const smoothMarkerPosition = useSmoothPosition(markerPosition);
+  const [patientHeading, setPatientHeading] = useState<number>(0);
   
   // State สำหรับโหมดนำทาง (Driver Mode)
   const [isNavigating, setIsNavigating] = useState(false)
@@ -99,8 +132,8 @@ export default function Home() {
     clickableIcons: false,
     scrollwheel: true,
     mapTypeId: isNavigating ? 'hybrid' : 'roadmap', // เปลี่ยนเป็นดาวเทียมเมื่อนำทาง
-    tilt: isNavigating ? 45 : 0,
-    heading: isNavigating ? adminHeading : 0,
+    tilt: 55, // 3D View Default
+    heading: 0, // North Default
     // Explicitly hide controls to prevent "N" compass overlap
     zoomControl: false,
     mapTypeControl: false,
@@ -109,7 +142,7 @@ export default function Home() {
     fullscreenControl: false,
     mapId: "90f87356969d889c", // Vector Map Demo ID
     gestureHandling: "greedy",
-  }), [isNavigating, adminHeading]);
+  }), [isNavigating]); // Remove adminHeading dependency as it is handled manually via moveCamera
   
   // Ref for accessing latest admin location inside callbacks without re-subscribing
   const adminLocationRef = useRef<google.maps.LatLngLiteral | null>(null);
@@ -156,12 +189,32 @@ export default function Home() {
         // ใช้ moveCamera แทน panTo เพื่อความลื่นไหล (60fps animation)
         map.moveCamera({
             center: smoothAdminLocation,
-            heading: adminHeading,
-            tilt: 45,
+            heading: adminHeading, // หมุนตามทิศทางเดินจริง
+            tilt: 55, // ปรับ tilt 55 องศา ตาม request
             zoom: 20
         });
     }
   }, [isNavigating, smoothAdminLocation, adminHeading, map, isAutoCenter]);
+
+  // Helper: Update Camera to follow patient in 3D
+  const updateCamera3D = (target: google.maps.LatLngLiteral, heading: number) => {
+    if (map) {
+        map.moveCamera({
+            center: target,
+            heading: heading,
+            tilt: 55,
+            zoom: 18
+        });
+    }
+  };
+
+  // Effect สำหรับโหมดติดตามผู้ป่วย (Patient Tracking Mode)
+  useEffect(() => {
+    if (!isNavigating && smoothMarkerPosition && map && isAutoCenter) {
+         // ใช้ moveCamera เพื่อคุม Tilt/Heading แบบ 3D
+         updateCamera3D(smoothMarkerPosition, patientHeading);
+    }
+  }, [isNavigating, smoothMarkerPosition, patientHeading, map, isAutoCenter]);
 
   // ฟังก์ชันคำนวณระยะทาง
   const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -209,6 +262,11 @@ export default function Home() {
           const leg = result.routes[0].legs[0];
           setRouteSteps(leg.steps); 
           setCurrentStepIndex(0); // เริ่มต้นที่ Step แรก
+          
+          // คำนวณเวลาถึงจุดหมาย (Anchor Time)
+          const durationSec = leg.duration?.value || 0;
+          const arrival = new Date(Date.now() + durationSec * 1000);
+          setDestinationTime(arrival);
         } else {
           console.error(`Directions request failed due to ${status}`);
         }
@@ -274,6 +332,9 @@ export default function Home() {
   //   );
   // };
 
+  // Ref สำหรับเก็บตำแหน่งผู้ป่วยที่คำนวณเส้นทางครั้งล่าสุด
+  const lastCalcPatientPosRef = useRef<google.maps.LatLngLiteral | null>(null);
+
   // Ref สำหรับ Throttle การคำนวณเส้นทาง (เพื่อประหยัด Quota API)
   const lastRouteCalcTimeRef = useRef<number>(0);
 
@@ -293,14 +354,37 @@ export default function Home() {
     const newStatus = getStatus(distance);
     setStatusInfo(newStatus);
     
-    // ถ้าเป็นระยะ Danger ให้คำนวณเส้นทางใหม่ทันที (หรือถ้ากำลังนำทางอยู่ก็ต้องคำนวณตลอด)
-    if (distance > SAFE_ZONE_DANGER || isNavigating) {
+    // Logic นำทาง: คำนวณเส้นทางใหม่เมื่อผู้ป่วยขยับเกิน 20 เมตร
+    if (isNavigating) {
+        let shouldRecalc = false;
+
+        if (!lastCalcPatientPosRef.current) {
+            shouldRecalc = true;
+        } else {
+            const distFromLastCalc = getDistanceFromLatLonInM(
+                lat, lng, 
+                lastCalcPatientPosRef.current.lat, lastCalcPatientPosRef.current.lng
+            );
+            if (distFromLastCalc > 20) {
+                shouldRecalc = true;
+            }
+        }
+
+        if (shouldRecalc) {
+             const origin = adminLocationRef.current || safeZoneCenter;
+             calculateRoute(origin, { lat, lng });
+             lastCalcPatientPosRef.current = { lat, lng };
+        }
+    } 
+    // Logic เดิมสำหรับ Safe Zone (ถ้ายังไม่ได้นำทาง แต่ออกนอกเขต)
+    else if (distance > SAFE_ZONE_DANGER) {
         const now = Date.now();
-        // Throttle: คำนวณใหม่ทุกๆ 10 วินาทีพอ (เพื่อไม่ให้เปลือง Quota Google Maps API)
+        // Throttle: คำนวณใหม่ทุกๆ 10 วินาทีพอ (เมื่อไม่ได้นำทาง Active)
         if (now - lastRouteCalcTimeRef.current > 10000) {
             const origin = adminLocationRef.current || safeZoneCenter;
             calculateRoute(origin, { lat, lng });
             lastRouteCalcTimeRef.current = now;
+            lastCalcPatientPosRef.current = { lat, lng };
         }
     } else {
         if (!isNavigating) setDirectionsResponse(null); // ถ้าไม่ได้นำทาง และปลอดภัย ให้ลบเส้น
@@ -418,17 +502,17 @@ export default function Home() {
     
     // 1. Noise Filter: เช็คระยะทางก่อนว่าควรขยับไหม?
     let dist = 0;
-    let heading = 0;
     
     if (prevPos) {
-        dist = getDistanceMeters(prevPos, newPos);
+        dist = getDistanceFromLatLonInM(prevPos.lat, prevPos.lng, newPos.lat, newPos.lng); // Use existing helper
         
         // ถ้าขยับน้อยกว่า 2 เมตร ถือว่าเป็น GPS Noise -> ไม่ทำอะไรเลย (นิ่งๆ ไว้)
         if (dist < 2) return;
 
         // คำนวณ Heading
         if (prevPos.lat !== newPos.lat || prevPos.lng !== newPos.lng) {
-            heading = calculateHeading(prevPos, newPos);
+            const newHeading = calculateHeading(prevPos, newPos);
+            setPatientHeading(newHeading);
         }
     }
 
@@ -440,14 +524,7 @@ export default function Home() {
     localStorage.setItem('lastPatientLat', lat.toString());
     localStorage.setItem('lastPatientLng', lng.toString());
     
-    // 2. Smart Camera Follow: กล้องจะตามก็ต่อเมื่อขยับเยอะพอสมควร หรือ Heading เปลี่ยนชัดเจน
-    // ช่วยลดอาการ "เด้งไปเด้งมา" (Jitter)
-    if (isAutoCenter && !isNavigating) {
-       // ขยับกล้องก็ต่อเมื่อระยะทาง > 5 เมตร หรือเพิ่งเริ่ม (ไม่มี prevPos)
-       if (!prevPos || dist > 5) {
-            followPatient(newPos, heading || (map ? map.getHeading() || 0 : 0));
-       } 
-    }
+    // Note: ไม่ต้องเรียก followPatient() ตรงนี้แล้ว เพราะใช้ useEffect (smoothMarkerPosition) คุมกล้องแทน เพื่อความลื่นไหล 60fps
   }
 
   useEffect(() => {
@@ -495,29 +572,95 @@ export default function Home() {
   }
 
   // --- TTS Logic (Text-to-Speech) ---
+  // --- TTS Logic (Text-to-Speech) ---
   const speak = (text: string) => {
     if (isMuted || typeof window === 'undefined') return;
     window.speechSynthesis.cancel();
+
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'th-TH'; 
+    
+    // ค้นหาเสียงภาษาไทยในระบบ
+    const voices = window.speechSynthesis.getVoices();
+    // พยายามหาเสียงที่เป็น 'th-TH' หรือที่มีคำว่า 'Thai'
+    const thaiVoice = voices.find(voice => voice.lang === 'th-TH' || voice.name.includes('Thai'));
+    
+    if (thaiVoice) {
+      utterance.voice = thaiVoice;
+    }
+    
+    utterance.lang = 'th-TH';
+    utterance.rate = 1.0; // ความเร็วปกติ
+    utterance.pitch = 1.0;
+    
     window.speechSynthesis.speak(utterance);
   };
 
-  // Ref to track last spoken instruction
-  const lastSpokenRef = useRef<string>("");
+  // Ref to track spoken steps (indices) to prevent duplicates
+  const spokenStepsRef = useRef<Set<number>>(new Set());
 
-  // Speak when instruction changes
+  // Reset spoken steps when new route is calculated
   useEffect(() => {
-    if (isNavigating && routeSteps.length > 0 && routeSteps[currentStepIndex]) {
-        const text = stripHtml(routeSteps[currentStepIndex].instructions);
-        
-        // Only speak if different from last time to prevent repetition
-        if (text !== lastSpokenRef.current) {
-            speak(text);
-            lastSpokenRef.current = text;
+     spokenStepsRef.current.clear();
+  }, [directionsResponse]);
+
+  // Voice Navigation Logic (Poll every 2 seconds)
+  useEffect(() => {
+    if (!isNavigating || !routeSteps.length || !adminLocation) return;
+
+    const intervalId = setInterval(() => {
+        const currentStep = routeSteps[currentStepIndex];
+        if (!currentStep) return;
+
+        // คำนวณระยะห่างถึงจุดเลี้ยว (End Location of current step)
+        const dist = getDistanceFromLatLonInM(
+            adminLocation.lat, adminLocation.lng, 
+            currentStep.end_location.lat(), currentStep.end_location.lng()
+        );
+
+        // ถ้าใกล้จุดเลี้ยว (<= 50 เมตร) และยังไม่เคยพูด Step นี้
+        if (dist <= 50 && !spokenStepsRef.current.has(currentStepIndex)) {
+            let message = "";
+            
+            // กรณีไม่ใช่ Step สุดท้าย -> อ่าน Step ถัดไป (เลี้ยวซ้าย/ขวา)
+            if (currentStepIndex < routeSteps.length - 1) {
+                const nextStep = routeSteps[currentStepIndex + 1];
+                const instruction = stripHtml(nextStep.instructions); // เช่น "เลี้ยวซ้าย ไปยัง..."
+                message = `อีก 50 เมตร ${instruction}`;
+            } 
+            // กรณี Step สุดท้าย -> ถึงจุดหมาย
+            else {
+                message = "อีก 50 เมตร ถึงจุดหมาย";
+            }
+
+            speak(message);
+            spokenStepsRef.current.add(currentStepIndex); // Mark as spoken
         }
-    }
-  }, [currentStepIndex, isNavigating, routeSteps]); // stripHtml is stable/const
+
+    }, 2000); // Check every 2 seconds
+
+    return () => clearInterval(intervalId);
+  }, [isNavigating, routeSteps, currentStepIndex, adminLocation]);
+
+  // Timer for ETA update (Duration Countdown)
+  useEffect(() => {
+    if (!destinationTime) return;
+
+    const updateTimer = () => {
+        const now = Date.now();
+        const diffMs = destinationTime.getTime() - now;
+        
+        // Update Minutes Remaining
+        const mins = Math.max(0, Math.ceil(diffMs / 60000));
+        setDurationText(mins.toString());
+
+        // Update ETA Text (Fixed arrival time)
+        setEtaText(destinationTime.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }));
+    };
+
+    updateTimer(); // Initial call
+    const interval = setInterval(updateTimer, 30000); // Update every 30s
+    return () => clearInterval(interval);
+  }, [destinationTime]);
 
   // Speak welcome message
   useEffect(() => {
@@ -644,10 +787,7 @@ export default function Home() {
                      <button 
                         onClick={() => {
                             setIsAutoCenter(true); 
-                            // Advance Recenter: Focus Patient using helper
-                            if (map && markerPosition) {
-                                followPatient(markerPosition, map.getHeading() || 0);
-                            }
+                            // Auto Center will pick up via useEffect automatically
                         }}
                         className="bg-white text-[#1A73E8] px-5 py-2.5 rounded-full shadow-lg flex items-center gap-2 text-base font-bold border border-gray-100 animate-fade-in-up"
                      >
@@ -670,9 +810,7 @@ export default function Home() {
                         <div className="flex items-baseline gap-2">
                              {/* Duration (Green & Compact) */}
                              <span className="text-4xl font-bold text-[#188038] tracking-tight font-sans text-shadow-sm">
-                                {directionsResponse?.routes[0]?.legs[0]?.duration?.value 
-                                    ? Math.ceil(directionsResponse.routes[0].legs[0].duration.value / 60) 
-                                    : 0} <span className="text-xl font-semibold text-gray-600">นาที</span>
+                                {durationText} <span className="text-xl font-semibold text-gray-600">นาที</span>
                              </span>
                         </div>
                         
@@ -682,11 +820,9 @@ export default function Home() {
                                 {directionsResponse?.routes[0]?.legs[0]?.distance?.text || '0 กม.'}
                              </span>
                              <span className="text-gray-300">•</span>
-                             {/* ETA Time (Mockup logic) */}
+                             {/* ETA Time */}
                              <span>
-                                {directionsResponse?.routes[0]?.legs[0]?.duration?.value 
-                                    ? new Date(Date.now() + directionsResponse.routes[0].legs[0].duration.value * 1000).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
-                                    : '--:--'} น.
+                                ถึง {etaText} น.
                              </span>
                         </div>
                     </div>
@@ -722,13 +858,14 @@ export default function Home() {
                  <button 
                     onClick={() => {
                         setIsAutoCenter(true);
-                        if (map) {
-                            // Focus back to relevant point (Patient or Admin)
-                            const target = markerPosition || adminLocation;
-                            if (target) {
-                                map.panTo(target);
-                                map.setZoom(16);
-                            }
+                        // Force update camera immediately
+                        if (map && markerPosition) {
+                            map.moveCamera({
+                                center: markerPosition,
+                                heading: patientHeading,
+                                tilt: 55,
+                                zoom: 18
+                            });
                         }
                     }}
                     className="bg-white text-[#1A73E8] px-5 py-2.5 rounded-full shadow-lg flex items-center gap-2 text-base font-bold border border-gray-100 animate-fade-in-up"
@@ -839,24 +976,92 @@ export default function Home() {
       >
         {/* Patient Marker (Standard Google Pin) */}
         <Marker 
-            position={markerPosition} 
+            position={smoothMarkerPosition || markerPosition} 
             // animation={window.google?.maps?.Animation?.DROP} // เอาออกเพื่อให้ขยับสมูท ไม่เด้งลงมาจากฟ้าทุกครั้ง
         />
 
         {/* Marker แสดงตำแหน่งผู้ดูแล (Admin) - สีน้ำเงิน */}
+        {/* Marker แสดงตำแหน่งผู้ดูแล (Admin) */}
         {adminLocation && window.google && (
-          <Marker
-            position={smoothAdminLocation || adminLocation}
-            icon={{
-              path: window.google.maps.SymbolPath.CIRCLE,
-              fillColor: "#4285F4", // สีฟ้า Google
-              fillOpacity: 1,
-              strokeColor: "white",
-              strokeWeight: 2,
-              scale: 8, // ขนาดของจุด
-            }}
-            title="ตำแหน่งของคุณ (Admin)"
-          />
+          <>
+            {isNavigating ? (
+                /* --- Mode: Navigation (ลูกศร + วงกลมรองหลัง) --- */
+                <>
+                    {/* 0. Pulse Aura (วงกลมใหญ่จางๆ รอบนอก) */}
+                    <Marker
+                        position={smoothAdminLocation || adminLocation}
+                        icon={{
+                            path: window.google.maps.SymbolPath.CIRCLE,
+                            fillColor: "#4285F4",
+                            fillOpacity: 0.15, // จางๆ
+                            strokeColor: "#4285F4",
+                            strokeOpacity: 0.1,
+                            strokeWeight: 1,
+                            scale: 40, // ใหญ่มาก เพื่อเป็นรัศมีรอบๆ
+                        }}
+                        zIndex={899} 
+                    />
+
+                    {/* 1. Base Circle (วงกลมพื้นหลังสีขาว) */}
+                    <Marker
+                        position={smoothAdminLocation || adminLocation}
+                        icon={{
+                            path: window.google.maps.SymbolPath.CIRCLE,
+                            fillColor: "white",
+                            fillOpacity: 1,
+                            strokeColor: "white", // กลมกลืนหรือตัดขอบเทาอ่อนๆ
+                            strokeWeight: 0,
+                            scale: 14, // วงกลมใหญ่
+                        }}
+                        // เพิ่ม Shadow เทียมด้วย Circle อีกชั้น หรือใช้ SVG ก็น่าจะดีกว่า แต่เอาแบบ Symbol ซ้อนกันง่ายสุด
+                        zIndex={900} 
+                    />
+                     {/* 1.1 Shadow Ring (วงแหวนเงาบางๆ) */}
+                     <Marker
+                        position={smoothAdminLocation || adminLocation}
+                        icon={{
+                            path: window.google.maps.SymbolPath.CIRCLE,
+                            fillColor: "transparent",
+                            strokeColor: "rgba(0,0,0,0.1)",
+                            strokeWeight: 4,
+                            scale: 14, 
+                        }}
+                        zIndex={901} 
+                    />
+
+                    {/* 2. Navigation Arrow (ลูกศรสีฟ้าขนาดใหญ่) */}
+                    <Marker
+                        position={smoothAdminLocation || adminLocation}
+                        icon={{
+                            // SVG Path ลูกศรทรงสวย (ยาวเรียว)
+                            path: "M 0,-20 L 8,5 L 0,0 L -8,5 Z", 
+                            fillColor: "#4285F4", 
+                            fillOpacity: 1,
+                            strokeColor: "white",
+                            strokeWeight: 2,
+                            scale: 1.8, // ใหญ่ขึ้น
+                            rotation: adminHeading // หมุนตามทิศ
+                        }}
+                        zIndex={1000}
+                    />
+                </>
+            ) : (
+                /* --- Mode: Normal (จุดสีฟ้า Google Dot เดิม) --- */
+                <Marker
+                    position={smoothAdminLocation || adminLocation}
+                    icon={{
+                        path: window.google.maps.SymbolPath.CIRCLE,
+                        fillColor: "#4285F4", 
+                        fillOpacity: 1,
+                        strokeColor: "white",
+                        strokeWeight: 2,
+                        scale: 8, 
+                    }}
+                    zIndex={1000}
+                    title="ตำแหน่งของคุณ (Admin)"
+                />
+            )}
+          </>
         )}
         
         {/* วงกลมชั้นที่ 1 (เตือน) */}
@@ -902,6 +1107,18 @@ export default function Home() {
                 strokeColor: "#2977F5", // ฟ้าสด Google Maps
                 strokeWeight: 8,        // เส้นหนาชัดเจน
                 strokeOpacity: 0.9,     // เกือบทึบ
+                icons: window.google ? [{
+                    icon: {
+                        path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                        scale: 3,
+                        strokeColor: 'white',
+                        strokeWeight: 1,
+                        fillColor: '#2977F5',
+                        fillOpacity: 1
+                    },
+                    offset: '0%',
+                    repeat: '50px' // ลูกศรทุกๆ 50px
+                }] : []
               },
               // [เป๊ะ 2] ปิด Marker เริ่มต้นของ Google เพื่อใช้ Marker รูปคน/Blue Dot ที่เราทำไว้เอง
               suppressMarkers: true, 
